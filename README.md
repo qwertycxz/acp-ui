@@ -58,7 +58,7 @@ ACP UI comes pre-configured with these agents:
 | Agent | Package |
 |-------|---------|
 | [GitHub Copilot](https://github.com/github/copilot-language-server-release?tab=readme-ov-file#agent-client-protocol-acp-preview) | `@github/copilot-language-server` |
-| [Claude Code](https://github.com/zed-industries/claude-code-acp) | `@zed-industries/claude-code-acp` |
+| [Claude Code](https://github.com/anthropics/claude-code) | `@agentclientprotocol/claude-agent-acp` |
 | [Gemini CLI](https://github.com/google-gemini/gemini-cli) | `@google/gemini-cli` |
 | [Qwen Code](https://github.com/QwenLM/qwen-code) | `@qwen-code/qwen-code` |
 | [Auggie CLI](https://github.com/AugmentCode/auggie) | `@augmentcode/auggie` |
@@ -96,7 +96,7 @@ Agent configurations are stored in:
     },
     "Claude Code": {
       "command": "npx",
-      "args": ["@zed-industries/claude-code-acp@latest"],
+      "args": ["@agentclientprotocol/claude-agent-acp@latest"],
       "env": {
         "ANTHROPIC_API_KEY": "sk-ant-..."
       }

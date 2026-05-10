@@ -95,7 +95,7 @@ impl Default for AgentsConfig {
             "Claude Code".to_string(),
             AgentConfig::stdio(
                 "npx".to_string(),
-                vec!["@zed-industries/claude-code-acp@latest".to_string()],
+                vec!["@agentclientprotocol/claude-agent-acp@latest".to_string()],
                 std::collections::HashMap::new(),
             ),
         );
