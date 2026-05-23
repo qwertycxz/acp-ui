@@ -21,7 +21,6 @@ Pages served over HTTPS can only open `wss://` URLs due to browser mixed-content
 - Authentication method selection
 - ACP traffic monitor
 - Foreground reconnect after tab visibility or network changes
-- Idle keep-alive pings for WebSocket connections
 
 ## Configuration
 

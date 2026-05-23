@@ -1,12 +1,9 @@
 // Types for ACP UI application
 
 /**
- * Transport kinds supported by the frontend.
- *
- * - `websocket`: agent listens on `ws://` / `wss://` and speaks ACP over a WebSocket.
- * - `http`: agent listens on `http://` / `https://` and speaks ACP over Streamable HTTP / SSE.
+ * Transport kinds supported by the frontend. Only WebSocket is supported.
  */
-export type AgentTransportKind = 'websocket' | 'http';
+export type AgentTransportKind = 'websocket';
 
 export interface AgentConfig {
   /**
@@ -29,13 +26,12 @@ export function getTransportKind(config: AgentConfig): AgentTransportKind {
   return config.transport ?? 'websocket';
 }
 
-/** Type guard: true for websocket / http agents with a non-empty URL. */
+/** Type guard: true for WebSocket agents with a non-empty URL. */
 export function isRemoteConfig(
   config: AgentConfig
 ): config is AgentConfig & { url: string } {
-  const kind = getTransportKind(config);
   return (
-    (kind === 'websocket' || kind === 'http') &&
+    getTransportKind(config) === 'websocket' &&
     typeof config.url === 'string' &&
     config.url.length > 0
   );

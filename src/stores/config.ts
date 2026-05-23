@@ -23,10 +23,9 @@ export const useConfigStore = defineStore('config', () => {
   }
 
   const remoteAgentNames = computed(() =>
-    allAgentNames.value.filter((name) => {
-      const k = getTransportKind(config.value.agents[name]);
-      return k === 'websocket' || k === 'http';
-    })
+    allAgentNames.value.filter(
+      (name) => getTransportKind(config.value.agents[name]) === 'websocket'
+    )
   );
 
   async function loadConfig() {

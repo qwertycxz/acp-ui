@@ -74,7 +74,7 @@ const reconnectingAgentName = computed(
 );
 
 // True when there is a saved session we *could* reconnect to but the
-// transport is currently down. Surfaces a manual "Reconnect" affordance on
+// WebSocket is currently down. Surfaces a manual "Reconnect" affordance on
 // the error banner so users don't have to background+foreground the app to
 // trigger the auto path.
 const canManuallyReconnect = computed(

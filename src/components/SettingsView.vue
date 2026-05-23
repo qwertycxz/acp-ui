@@ -82,12 +82,8 @@ async function handleSubmit() {
     return;
   }
   const lower = formUrl.value.trim().toLowerCase();
-  if (transport === 'websocket' && !(lower.startsWith('ws://') || lower.startsWith('wss://'))) {
+  if (!(lower.startsWith('ws://') || lower.startsWith('wss://'))) {
     formError.value = 'WebSocket URL must start with ws:// or wss://';
-    return;
-  }
-  if (transport === 'http' && !(lower.startsWith('http://') || lower.startsWith('https://'))) {
-    formError.value = 'HTTP URL must start with http:// or https://';
     return;
   }
 
@@ -168,7 +164,6 @@ async function handleDelete(name: string) {
               <label>Transport</label>
               <select v-model="formTransport">
                 <option value="websocket">websocket (remote)</option>
-                <option value="http">http (remote)</option>
               </select>
             </div>
 
@@ -177,10 +172,10 @@ async function handleDelete(name: string) {
               <input
                 v-model="formUrl"
                 type="text"
-                :placeholder="formTransport === 'websocket' ? 'wss://acp.example.com/v1' : 'https://acp.example.com/v1'"
+                placeholder="wss://acp.example.com/v1"
               />
               <small>
-                {{ formTransport === 'websocket' ? 'WebSocket endpoint (ws:// or wss://)' : 'Streamable HTTP endpoint (http:// or https://)' }}
+                WebSocket endpoint (ws:// or wss://)
               </small>
             </div>
 

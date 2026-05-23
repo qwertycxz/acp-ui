@@ -93,8 +93,7 @@ export const useSessionStore = defineStore('session', () => {
     }
   }
 
-  // Handle an unexpected transport close (e.g. WebSocket dropped while idle,
-  // local agent process exited). The bridge has already rejected any
+  // Handle an unexpected WebSocket close. The bridge has already rejected any
   // in-flight requests; we just need to tear down UI state so the user gets
   // a clear "disconnected" signal instead of a stale "connected" view.
   function handleUnexpectedClose(reason?: string): void {
@@ -105,7 +104,7 @@ export const useSessionStore = defineStore('session', () => {
     isConnected.value = false;
     isLoading.value = false;
     pendingPermission.value = null;
-    error.value = `Connection lost: ${reason ?? 'transport closed'}`;
+    error.value = `Connection lost: ${reason ?? 'websocket closed'}`;
   }
 
   // Session update handler
@@ -454,14 +453,13 @@ export const useSessionStore = defineStore('session', () => {
         throw new Error(`Agent '${savedSession.agentName}' not found in config`);
       }
 
-      // Create ACP client bridge (transport selected based on agent config).
+      // Create ACP client bridge.
       acpClient = await createAcpClient({
         name: savedSession.agentName,
         config: agentConfig,
       });
       acpClient.onSessionUpdate = handleSessionUpdate;
-      // Surface unexpected transport closes (e.g. WebSocket dropped while idle,
-      // local agent process crashed) so the UI doesn't sit on a stale
+      // Surface unexpected WebSocket closes so the UI doesn't sit on a stale
       // "connected" view forever.
       acpClient.onTransportClose = (reason) => {
         handleUnexpectedClose(reason);

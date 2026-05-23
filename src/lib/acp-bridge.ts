@@ -1,6 +1,5 @@
-// ACP Client Bridge - Adapts a generic AcpTransport to the ACP SDK's
-// Client interface. The bridge is transport-agnostic: it only depends on a
-// JSON message transport such as WebSocket or Streamable HTTP.
+// ACP Client Bridge - adapts the browser WebSocket API to the ACP SDK's
+// Client interface.
 import type {
   Client,
   SessionNotification,
@@ -23,17 +22,13 @@ import type {
   AuthenticateResponse,
 } from '@agentclientprotocol/sdk';
 import { readTextFile as hostReadTextFile, writeTextFile as hostWriteTextFile } from './host';
-import type { AcpTransport, Unsubscribe } from './transport/types';
-import { createTransport } from './transport';
 import type { AgentConfig, PermissionRequest as LocalPermissionRequest } from './types';
 import { hasLocalFs } from './platform';
 import { ref, type Ref } from 'vue';
 import { useTrafficStore } from '../stores/traffic';
 
-// Event emitter for permission requests
 type PermissionResolver = (response: RequestPermissionResponse) => void;
 
-// Traffic store instance (lazily initialized)
 let trafficStore: ReturnType<typeof useTrafficStore> | null = null;
 function getTrafficStore() {
   if (!trafficStore) {
@@ -42,94 +37,89 @@ function getTrafficStore() {
   return trafficStore;
 }
 
-/** JSON-RPC method-not-found error code. */
 const JSONRPC_METHOD_NOT_FOUND = -32601;
+const ACP_SUBPROTOCOL = 'acp.v1';
+const CONNECT_TIMEOUT_MS = 15_000;
 
 export class AcpClientBridge implements Client {
-  private transport: AcpTransport;
-  /**
-   * Local filesystem RPCs (`fs/read_text_file`, `fs/write_text_file`) are
-   * unavailable in the browser build, so these handlers respond with a
-   * method-not-found error unless a caller explicitly overrides the capability.
-   */
+  private socket: WebSocket;
   private fsAvailable: boolean;
   private messageResolvers: Map<number, (response: unknown) => void> = new Map();
   private messageRejecters: Map<number, (error: Error) => void> = new Map();
-  private pendingMethods: Map<number, string> = new Map(); // Track method names for responses
+  private pendingMethods: Map<number, string> = new Map();
   private nextRequestId = 0;
-  private unlistenMessage: Unsubscribe | null = null;
-  private unlistenClose: Unsubscribe | null = null;
+  private disconnected = false;
 
-  // Permission request handling
   public pendingPermissionRequest: Ref<LocalPermissionRequest | null> = ref(null);
   private permissionResolver: PermissionResolver | null = null;
 
-  // Session update callback
   public onSessionUpdate: ((notification: SessionNotification) => void) | null = null;
-
-  /** Optional callback for when the underlying transport closes unexpectedly. */
   public onTransportClose: ((reason?: string) => void) | null = null;
 
-  constructor(transport: AcpTransport, options?: { fsAvailable?: boolean }) {
-    this.transport = transport;
+  constructor(socket: WebSocket, options?: { fsAvailable?: boolean }) {
+    this.socket = socket;
     this.fsAvailable = options?.fsAvailable ?? hasLocalFs();
-    this.unlistenMessage = this.transport.onMessage((msg) => this.handleMessage(msg));
-    this.unlistenClose = this.transport.onClose((reason) => {
-      // Reject all in-flight requests so callers stop hanging.
-      const err = new Error(`transport closed: ${reason ?? 'unknown reason'}`);
-      for (const reject of this.messageRejecters.values()) {
-        try {
-          reject(err);
-        } catch {
-          /* ignore */
-        }
-      }
-      this.messageResolvers.clear();
-      this.messageRejecters.clear();
-      this.pendingMethods.clear();
-      if (this.onTransportClose) {
-        this.onTransportClose(reason);
-      }
+
+    socket.addEventListener('message', (event) => {
+      this.handleSocketMessage(event);
+    });
+    socket.addEventListener('close', (event) => {
+      this.handleSocketClose(
+        `websocket closed (code=${event.code}, reason=${event.reason || 'unknown'})`
+      );
+    });
+    socket.addEventListener('error', () => {
+      this.handleSocketClose('websocket error');
     });
   }
 
-  /**
-   * Backwards-compatible no-op. Connection setup now happens in the factory
-   * (`createAcpClient`) before the bridge is constructed.
-   */
   async connect(): Promise<void> {
-    // No-op: transport is already connected when handed to the bridge.
+    // No-op: the factory hands us an already-open WebSocket.
   }
 
   async disconnect(): Promise<void> {
-    // Unlisten first so the transport's close handler (which would re-reject
-    // pending requests and fire `onTransportClose`) doesn't run for a
-    // voluntary disconnect — `onTransportClose` is reserved for unexpected
-    // closes. Then explicitly reject any in-flight requests here so callers
-    // don't hang waiting for responses that will never arrive, and finally
-    // close the transport.
-    if (this.unlistenMessage) {
-      this.unlistenMessage();
-      this.unlistenMessage = null;
+    if (this.disconnected) return;
+    this.disconnected = true;
+    this.rejectInFlight(new Error('websocket closed: client disconnected'));
+    if (
+      this.socket.readyState === WebSocket.OPEN ||
+      this.socket.readyState === WebSocket.CONNECTING
+    ) {
+      this.socket.close(1000, 'client closed');
     }
-    if (this.unlistenClose) {
-      this.unlistenClose();
-      this.unlistenClose = null;
+  }
+
+  private handleSocketMessage(event: MessageEvent): void {
+    if (typeof event.data !== 'string') {
+      console.error('Received non-string WebSocket frame; dropping', event.data);
+      return;
     }
-    if (this.messageRejecters.size > 0) {
-      const err = new Error('transport closed: client disconnected');
-      for (const reject of this.messageRejecters.values()) {
-        try {
-          reject(err);
-        } catch {
-          /* ignore */
-        }
+
+    for (const frame of splitFrames(event.data)) {
+      this.handleMessage(frame);
+    }
+  }
+
+  private handleSocketClose(reason: string): void {
+    if (this.disconnected) return;
+    this.disconnected = true;
+    this.rejectInFlight(new Error(reason));
+    if (this.onTransportClose) {
+      this.onTransportClose(reason);
+    }
+  }
+
+  private rejectInFlight(error: Error): void {
+    for (const reject of this.messageRejecters.values()) {
+      try {
+        reject(error);
+      } catch {
+        /* ignore */
       }
-      this.messageResolvers.clear();
-      this.messageRejecters.clear();
-      this.pendingMethods.clear();
     }
-    await this.transport.close();
+    this.messageResolvers.clear();
+    this.messageRejecters.clear();
+    this.pendingMethods.clear();
   }
 
   private handleMessage(message: string): void {
@@ -137,9 +127,7 @@ export class AcpClientBridge implements Client {
       const parsed = JSON.parse(message);
       const store = getTrafficStore();
 
-      // Handle JSON-RPC response (has id and result/error, no method)
       if ('id' in parsed && parsed.id !== undefined && !('method' in parsed)) {
-        // Track incoming response
         store.addEntry({
           direction: 'in',
           type: 'response',
@@ -164,9 +152,7 @@ export class AcpClientBridge implements Client {
         }
       }
 
-      // Handle JSON-RPC request from agent (has id and method)
       if ('id' in parsed && parsed.id !== undefined && 'method' in parsed) {
-        // Track incoming request from agent
         store.addEntry({
           direction: 'in',
           type: 'request',
@@ -174,12 +160,10 @@ export class AcpClientBridge implements Client {
           requestId: parsed.id,
           payload: parsed,
         });
-        this.handleRequest(parsed.id, parsed.method, parsed.params);
+        void this.handleRequest(parsed.id, parsed.method, parsed.params);
       }
 
-      // Handle JSON-RPC notification (no id, has method)
       if (!('id' in parsed) && parsed.method) {
-        // Track incoming notification
         store.addEntry({
           direction: 'in',
           type: 'notification',
@@ -223,12 +207,10 @@ export class AcpClientBridge implements Client {
       error = { code: -32603, message: e instanceof Error ? e.message : String(e) };
     }
 
-    // Send response back to agent
     const response = error
       ? { jsonrpc: '2.0', id, error }
       : { jsonrpc: '2.0', id, result };
 
-    // Track outgoing response
     const store = getTrafficStore();
     store.addEntry({
       direction: 'out',
@@ -239,14 +221,12 @@ export class AcpClientBridge implements Client {
       error: !!error,
     });
 
-    await this.transport.send(JSON.stringify(response));
+    this.sendFrame(JSON.stringify(response));
   }
 
   private handleNotification(method: string, params: unknown): void {
-    if (method === 'session/update') {
-      if (this.onSessionUpdate) {
-        this.onSessionUpdate(params as SessionNotification);
-      }
+    if (method === 'session/update' && this.onSessionUpdate) {
+      this.onSessionUpdate(params as SessionNotification);
     }
   }
 
@@ -259,7 +239,6 @@ export class AcpClientBridge implements Client {
       params: params || {},
     };
 
-    // Track outgoing request
     const store = getTrafficStore();
     store.addEntry({
       direction: 'out',
@@ -278,14 +257,15 @@ export class AcpClientBridge implements Client {
       });
       this.messageRejecters.set(id, reject);
 
-      this.transport.send(JSON.stringify(request)).catch((e) => {
+      try {
+        this.sendFrame(JSON.stringify(request));
+      } catch (e) {
         this.messageResolvers.delete(id);
         this.messageRejecters.delete(id);
         this.pendingMethods.delete(id);
         reject(e);
-      });
+      }
 
-      // Timeout after 60 seconds (increased for auth flows)
       setTimeout(() => {
         if (this.messageResolvers.has(id)) {
           this.messageResolvers.delete(id);
@@ -304,7 +284,6 @@ export class AcpClientBridge implements Client {
       params: params || {},
     };
 
-    // Track outgoing notification
     const store = getTrafficStore();
     store.addEntry({
       direction: 'out',
@@ -313,10 +292,19 @@ export class AcpClientBridge implements Client {
       payload: notification,
     });
 
-    await this.transport.send(JSON.stringify(notification));
+    this.sendFrame(JSON.stringify(notification));
   }
 
-  // ACP Agent methods (client calls these to talk to agent)
+  private sendFrame(json: string): void {
+    if (this.disconnected || this.socket.readyState === WebSocket.CLOSED) {
+      throw new Error('WebSocket is closed');
+    }
+    if (this.socket.readyState !== WebSocket.OPEN) {
+      throw new Error(`WebSocket is not open (readyState=${this.socket.readyState})`);
+    }
+    this.socket.send(json.endsWith('\n') ? json : `${json}\n`);
+  }
+
   async initialize(params: InitializeRequest): Promise<InitializeResponse> {
     return this.sendRequest<InitializeResponse>('initialize', params);
   }
@@ -349,7 +337,6 @@ export class AcpClientBridge implements Client {
     return this.sendRequest<AuthenticateResponse>('authenticate', params);
   }
 
-  // ACP Client interface methods (agent calls these)
   async requestPermission(
     params: RequestPermissionRequest
   ): Promise<RequestPermissionResponse> {
@@ -399,7 +386,7 @@ export class AcpClientBridge implements Client {
   }
 
   async sessionUpdate(_params: SessionNotification): Promise<void> {
-    // This is called by the agent, we handle it in handleNotification
+    // This is called by the agent; inbound notifications are handled above.
   }
 
   async writeTextFile(
@@ -421,10 +408,9 @@ export class AcpClientBridge implements Client {
     try {
       let content = await hostReadTextFile(params.path);
 
-      // Handle line/limit parameters if specified
       if (params.line !== undefined || params.limit !== undefined) {
         const lines = content.split('\n');
-        const startLine = params.line ? params.line - 1 : 0; // 1-based to 0-based
+        const startLine = params.line ? params.line - 1 : 0;
         const endLine = params.limit ? startLine + params.limit : lines.length;
         content = lines.slice(startLine, endLine).join('\n');
       }
@@ -438,14 +424,81 @@ export class AcpClientBridge implements Client {
   }
 }
 
-/**
- * Factory: connect a transport for the given agent and wrap it in an
- * `AcpClientBridge`.
- */
 export async function createAcpClient(
   arg: { name: string; config: AgentConfig },
   options?: { fsAvailable?: boolean }
 ): Promise<AcpClientBridge> {
-  const transport = await createTransport(arg.name, arg.config);
-  return new AcpClientBridge(transport, options);
+  const socket = await connectWebSocket(arg.name, arg.config);
+  return new AcpClientBridge(socket, options);
+}
+
+async function connectWebSocket(agentName: string, config: AgentConfig): Promise<WebSocket> {
+  if (!config.url) {
+    throw new Error(`Agent '${agentName}' is missing 'url' for websocket transport`);
+  }
+
+  const socket = new WebSocket(config.url, buildSubprotocols(config.headers));
+
+  await new Promise<void>((resolve, reject) => {
+    let settled = false;
+    const settle = (fn: () => void) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      fn();
+    };
+
+    const timer = setTimeout(() => {
+      settle(() => {
+        try {
+          socket.close();
+        } catch {
+          /* ignore */
+        }
+        reject(new Error(`WebSocket connect timed out after ${CONNECT_TIMEOUT_MS}ms`));
+      });
+    }, CONNECT_TIMEOUT_MS);
+
+    socket.addEventListener('open', () => settle(resolve));
+    socket.addEventListener('error', () => settle(() => reject(new Error('WebSocket connect failed'))));
+    socket.addEventListener('close', (event) => {
+      settle(() =>
+        reject(
+          new Error(
+            `WebSocket closed before open (code=${event.code}, reason=${event.reason || 'unknown'})`
+          )
+        )
+      );
+    });
+  });
+
+  return socket;
+}
+
+function splitFrames(data: string): string[] {
+  const lines = data.includes('\n') ? data.split('\n') : [data];
+  return lines.map((line) => line.trim()).filter((line) => line.length > 0);
+}
+
+function buildSubprotocols(headers?: Record<string, string>): string[] {
+  const protocols: string[] = [ACP_SUBPROTOCOL];
+  const auth = headers ? pickHeader(headers, 'authorization') : undefined;
+  if (!auth) return protocols;
+
+  const match = /^Bearer\s+(.+)$/i.exec(auth.trim());
+  if (match) {
+    protocols.push(`bearer.${match[1].replace(/\s+/g, '')}`);
+  }
+  return protocols;
+}
+
+function pickHeader(
+  headers: Record<string, string>,
+  name: string
+): string | undefined {
+  const target = name.toLowerCase();
+  for (const [key, value] of Object.entries(headers)) {
+    if (key.toLowerCase() === target) return value;
+  }
+  return undefined;
 }

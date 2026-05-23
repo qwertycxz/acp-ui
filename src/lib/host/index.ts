@@ -9,9 +9,9 @@ import { getTransportKind } from '../types';
 
 export type Unlisten = () => void;
 
-/** Optional fields used when adding/updating a remote (websocket / http) agent. */
+/** Optional fields used when adding/updating a WebSocket agent. */
 export interface RemoteAgentOptions {
-  transport?: 'websocket' | 'http';
+  transport?: 'websocket';
   url?: string;
   headers?: Record<string, string>;
 }
@@ -54,11 +54,8 @@ function buildAgentConfig(
   const url = remote.url?.trim();
   if (!url) throw new Error('remote agent requires a url');
   const lower = url.toLowerCase();
-  if (transport === 'websocket' && !(lower.startsWith('ws://') || lower.startsWith('wss://'))) {
+  if (!(lower.startsWith('ws://') || lower.startsWith('wss://'))) {
     throw new Error(`URL scheme does not match transport 'websocket': ${url}`);
-  }
-  if (transport === 'http' && !(lower.startsWith('http://') || lower.startsWith('https://'))) {
-    throw new Error(`URL scheme does not match transport 'http': ${url}`);
   }
 
   void command;
