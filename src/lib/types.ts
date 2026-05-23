@@ -1,55 +1,13 @@
 // Types for ACP UI application
 
-/**
- * Transport kinds supported by the frontend. Only WebSocket is supported.
- */
-export type AgentTransportKind = 'websocket';
-
 export interface AgentConfig {
-  /**
-   * Transport kind. Optional for backward compatibility; when omitted, the
-   * config is treated as a WebSocket agent.
-   */
-  transport?: AgentTransportKind;
-
-  // ----- remote fields -----
+  transport?: 'websocket';
   url?: string;
   headers?: Record<string, string>;
 }
 
 export interface AgentsConfig {
   agents: Record<string, AgentConfig>;
-}
-
-/** Returns the effective transport kind for an agent config. */
-export function getTransportKind(config: AgentConfig): AgentTransportKind {
-  return config.transport ?? 'websocket';
-}
-
-/** Type guard: true for WebSocket agents with a non-empty URL. */
-export function isRemoteConfig(
-  config: AgentConfig
-): config is AgentConfig & { url: string } {
-  return (
-    getTransportKind(config) === 'websocket' &&
-    typeof config.url === 'string' &&
-    config.url.length > 0
-  );
-}
-
-export interface AgentInstance {
-  id: string;
-  name: string;
-}
-
-export interface AgentMessage {
-  agent_id: string;
-  message: string;
-}
-
-export interface AgentStderr {
-  agent_id: string;
-  line: string;
 }
 
 export interface SavedSession {

@@ -1,49 +1,17 @@
 <script setup lang="ts">
 import { computed, watch } from 'vue';
 import { useConfigStore } from '../stores/config';
-import { restrictedTransports } from '../lib/platform';
-
-const emit = defineEmits<{
-  select: [agentName: string];
-}>();
 
 const configStore = useConfigStore();
-
 const selectedAgent = defineModel<string>('selected', { default: '' });
-
 const agents = computed(() => configStore.agentNames);
 const hasAgents = computed(() => configStore.hasAgents);
-const configPath = computed(() => configStore.configPath);
-// Browser config lives in localStorage, so point users at Settings instead of
-// a filesystem path.
-const restricted = restrictedTransports();
 
-/** Build the display label for each agent once, instead of calling
- * `getAgentTransportKind` twice per option in the template. */
-const agentLabels = computed<Record<string, string>>(() => {
-  const out: Record<string, string> = {};
-  for (const name of agents.value) {
-    const kind = configStore.getAgentTransportKind(name);
-    out[name] = `${name} (${kind})`;
-  }
-  return out;
-});
-
-// Auto-select first agent when agents are available and none selected
 watch(agents, (newAgents) => {
   if (newAgents.length > 0 && !selectedAgent.value) {
     selectedAgent.value = newAgents[0];
-    emit('select', newAgents[0]);
   }
 }, { immediate: true });
-
-function handleSelect(event: Event) {
-  const target = event.target as HTMLSelectElement;
-  selectedAgent.value = target.value;
-  if (target.value) {
-    emit('select', target.value);
-  }
-}
 </script>
 
 <template>
@@ -51,27 +19,20 @@ function handleSelect(event: Event) {
     <label for="agent-select">Agent:</label>
     <select
       id="agent-select"
-      :value="selectedAgent"
-      @change="handleSelect"
+      v-model="selectedAgent"
       :disabled="!hasAgents"
     >
       <option value="" disabled>
         {{ hasAgents ? 'Select an agent...' : 'No agents configured' }}
       </option>
       <option v-for="agent in agents" :key="agent" :value="agent">
-        {{ agentLabels[agent] }}
+        {{ agent }} (websocket)
       </option>
     </select>
 
     <div v-if="!hasAgents" class="config-hint">
-      <template v-if="restricted">
-        <p>No remote agents configured.</p>
-        <p class="hint-action">Open Settings (⚙) to add one.</p>
-      </template>
-      <template v-else>
-        <p>No agents found. Add agents to:</p>
-        <code>{{ configPath }}</code>
-      </template>
+      <p>No remote agents configured.</p>
+      <p class="hint-action">Open Settings to add one.</p>
     </div>
   </div>
 </template>

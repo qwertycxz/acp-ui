@@ -2,7 +2,6 @@
 import { ref, computed, nextTick, watch } from 'vue';
 import { marked } from 'marked';
 import { useSessionStore } from '../stores/session';
-import { isMobile } from '../lib/platform';
 import ModePicker from './ModePicker.vue';
 import ModelPicker from './ModelPicker.vue';
 import CommandPalette from './CommandPalette.vue';
@@ -16,7 +15,13 @@ const commandPaletteRef = ref<InstanceType<typeof CommandPalette> | null>(null);
 // On mobile (iOS/Android) the soft-keyboard's Return key should insert a
 // newline like every other native chat app; submitting is the dedicated
 // Send button. On desktop, Enter still submits and Shift+Enter newlines.
-const submitOnEnter = !isMobile();
+const submitOnEnter =
+  !/Android|iPhone|iPad|iPod/i.test(navigator.userAgent) &&
+  !(
+    /Macintosh/i.test(navigator.userAgent) &&
+    (navigator as Navigator & { maxTouchPoints?: number }).maxTouchPoints !== undefined &&
+    ((navigator as Navigator & { maxTouchPoints: number }).maxTouchPoints ?? 0) > 1
+  );
 
 // Track expanded thought sections by message id
 const expandedThoughts = ref<Set<string>>(new Set());

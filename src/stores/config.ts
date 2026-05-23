@@ -1,51 +1,22 @@
 // Agent configuration store
 import { defineStore } from 'pinia';
 import { ref, computed } from 'vue';
-import type { AgentsConfig, AgentConfig, AgentTransportKind } from '../lib/types';
-import { getTransportKind } from '../lib/types';
-import { getConfig, reloadConfig, getConfigPath, onConfigChanged } from '../lib/host';
+import type { AgentsConfig, AgentConfig } from '../lib/types';
+import { getConfig } from '../lib/host';
 
 export const useConfigStore = defineStore('config', () => {
   const config = ref<AgentsConfig>({ agents: {} });
-  const configPath = ref<string>('');
   const loading = ref(false);
   const error = ref<string | null>(null);
 
-  const allAgentNames = computed(() => Object.keys(config.value.agents));
-  const agentNames = computed(() => allAgentNames.value);
-
+  const agentNames = computed(() => Object.keys(config.value.agents));
   const hasAgents = computed(() => agentNames.value.length > 0);
-
-  /** Transport kind for an agent (defaults to 'websocket' for unknown names). */
-  function getAgentTransportKind(name: string): AgentTransportKind {
-    const c = config.value.agents[name];
-    return c ? getTransportKind(c) : 'websocket';
-  }
-
-  const remoteAgentNames = computed(() =>
-    allAgentNames.value.filter(
-      (name) => getTransportKind(config.value.agents[name]) === 'websocket'
-    )
-  );
 
   async function loadConfig() {
     loading.value = true;
     error.value = null;
     try {
       config.value = await getConfig();
-      configPath.value = await getConfigPath();
-    } catch (e) {
-      error.value = e instanceof Error ? e.message : String(e);
-    } finally {
-      loading.value = false;
-    }
-  }
-
-  async function reload() {
-    loading.value = true;
-    error.value = null;
-    try {
-      config.value = await reloadConfig();
     } catch (e) {
       error.value = e instanceof Error ? e.message : String(e);
     } finally {
@@ -57,15 +28,6 @@ export const useConfigStore = defineStore('config', () => {
     return config.value.agents[name];
   }
 
-  // Browser config has no external mutator; this is kept for call-site shape.
-  async function setupHotReload() {
-    await onConfigChanged((newConfig) => {
-      config.value = newConfig;
-      console.log('Config hot-reloaded:', newConfig);
-    });
-  }
-
-  // Update config from event (for settings updates)
   function updateFromEvent(newConfig: AgentsConfig) {
     config.value = newConfig;
   }
@@ -76,18 +38,12 @@ export const useConfigStore = defineStore('config', () => {
 
   return {
     config,
-    configPath,
     loading,
     error,
     agentNames,
-    allAgentNames,
-    remoteAgentNames,
     hasAgents,
-    getAgentTransportKind,
     loadConfig,
-    reload,
     getAgent,
-    setupHotReload,
     updateFromEvent,
     clearError,
   };

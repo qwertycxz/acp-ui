@@ -5,10 +5,6 @@ import type {
   SessionNotification,
   RequestPermissionRequest,
   RequestPermissionResponse,
-  WriteTextFileRequest,
-  WriteTextFileResponse,
-  ReadTextFileRequest,
-  ReadTextFileResponse,
   InitializeRequest,
   InitializeResponse,
   NewSessionRequest,
@@ -21,9 +17,7 @@ import type {
   AuthenticateRequest,
   AuthenticateResponse,
 } from '@agentclientprotocol/sdk';
-import { readTextFile as hostReadTextFile, writeTextFile as hostWriteTextFile } from './host';
 import type { AgentConfig, PermissionRequest as LocalPermissionRequest } from './types';
-import { hasLocalFs } from './platform';
 import { ref, type Ref } from 'vue';
 import { useTrafficStore } from '../stores/traffic';
 
@@ -38,12 +32,10 @@ function getTrafficStore() {
 }
 
 const JSONRPC_METHOD_NOT_FOUND = -32601;
-const ACP_SUBPROTOCOL = 'acp.v1';
 const CONNECT_TIMEOUT_MS = 15_000;
 
 export class AcpClientBridge implements Client {
   private socket: WebSocket;
-  private fsAvailable: boolean;
   private messageResolvers: Map<number, (response: unknown) => void> = new Map();
   private messageRejecters: Map<number, (error: Error) => void> = new Map();
   private pendingMethods: Map<number, string> = new Map();
@@ -56,9 +48,8 @@ export class AcpClientBridge implements Client {
   public onSessionUpdate: ((notification: SessionNotification) => void) | null = null;
   public onTransportClose: ((reason?: string) => void) | null = null;
 
-  constructor(socket: WebSocket, options?: { fsAvailable?: boolean }) {
+  constructor(socket: WebSocket) {
     this.socket = socket;
-    this.fsAvailable = options?.fsAvailable ?? hasLocalFs();
 
     socket.addEventListener('message', (event) => {
       this.handleSocketMessage(event);
@@ -95,8 +86,11 @@ export class AcpClientBridge implements Client {
       return;
     }
 
-    for (const frame of splitFrames(event.data)) {
-      this.handleMessage(frame);
+    for (const frame of event.data.includes('\n') ? event.data.split('\n') : [event.data]) {
+      const message = frame.trim();
+      if (message) {
+        this.handleMessage(message);
+      }
     }
   }
 
@@ -184,18 +178,10 @@ export class AcpClientBridge implements Client {
     try {
       switch (method) {
         case 'fs/read_text_file':
-          if (!this.fsAvailable) {
-            error = { code: JSONRPC_METHOD_NOT_FOUND, message: 'fs/read_text_file not available on this client' };
-          } else {
-            result = await this.readTextFile(params as ReadTextFileRequest);
-          }
+          error = { code: JSONRPC_METHOD_NOT_FOUND, message: 'fs/read_text_file not available on this client' };
           break;
         case 'fs/write_text_file':
-          if (!this.fsAvailable) {
-            error = { code: JSONRPC_METHOD_NOT_FOUND, message: 'fs/write_text_file not available on this client' };
-          } else {
-            result = await this.writeTextFile(params as WriteTextFileRequest);
-          }
+          error = { code: JSONRPC_METHOD_NOT_FOUND, message: 'fs/write_text_file not available on this client' };
           break;
         case 'session/request_permission':
           result = await this.requestPermission(params as RequestPermissionRequest);
@@ -211,8 +197,7 @@ export class AcpClientBridge implements Client {
       ? { jsonrpc: '2.0', id, error }
       : { jsonrpc: '2.0', id, result };
 
-    const store = getTrafficStore();
-    store.addEntry({
+    getTrafficStore().addEntry({
       direction: 'out',
       type: 'response',
       method,
@@ -239,8 +224,7 @@ export class AcpClientBridge implements Client {
       params: params || {},
     };
 
-    const store = getTrafficStore();
-    store.addEntry({
+    getTrafficStore().addEntry({
       direction: 'out',
       type: 'request',
       method,
@@ -284,8 +268,7 @@ export class AcpClientBridge implements Client {
       params: params || {},
     };
 
-    const store = getTrafficStore();
-    store.addEntry({
+    getTrafficStore().addEntry({
       direction: 'out',
       type: 'notification',
       method,
@@ -389,55 +372,25 @@ export class AcpClientBridge implements Client {
     // This is called by the agent; inbound notifications are handled above.
   }
 
-  async writeTextFile(
-    params: WriteTextFileRequest
-  ): Promise<WriteTextFileResponse> {
-    try {
-      await hostWriteTextFile(params.path, params.content);
-      console.log('writeTextFile completed:', params.path);
-      return {};
-    } catch (e) {
-      console.error('writeTextFile failed:', params.path, e);
-      throw e;
-    }
-  }
-
-  async readTextFile(
-    params: ReadTextFileRequest
-  ): Promise<ReadTextFileResponse> {
-    try {
-      let content = await hostReadTextFile(params.path);
-
-      if (params.line !== undefined || params.limit !== undefined) {
-        const lines = content.split('\n');
-        const startLine = params.line ? params.line - 1 : 0;
-        const endLine = params.limit ? startLine + params.limit : lines.length;
-        content = lines.slice(startLine, endLine).join('\n');
-      }
-
-      console.log('readTextFile completed:', params.path);
-      return { content };
-    } catch (e) {
-      console.error('readTextFile failed:', params.path, e);
-      throw e;
-    }
-  }
 }
 
 export async function createAcpClient(
-  arg: { name: string; config: AgentConfig },
-  options?: { fsAvailable?: boolean }
+  arg: { name: string; config: AgentConfig }
 ): Promise<AcpClientBridge> {
-  const socket = await connectWebSocket(arg.name, arg.config);
-  return new AcpClientBridge(socket, options);
-}
-
-async function connectWebSocket(agentName: string, config: AgentConfig): Promise<WebSocket> {
-  if (!config.url) {
-    throw new Error(`Agent '${agentName}' is missing 'url' for websocket transport`);
+  if (!arg.config.url) {
+    throw new Error(`Agent '${arg.name}' is missing 'url' for websocket transport`);
   }
 
-  const socket = new WebSocket(config.url, buildSubprotocols(config.headers));
+  const protocols = ['acp.v1'];
+  const auth = arg.config.headers
+    ? Object.entries(arg.config.headers).find(([key]) => key.toLowerCase() === 'authorization')?.[1]
+    : undefined;
+  const match = auth ? /^Bearer\s+(.+)$/i.exec(auth.trim()) : null;
+  if (match) {
+    protocols.push(`bearer.${match[1].replace(/\s+/g, '')}`);
+  }
+
+  const socket = new WebSocket(arg.config.url, protocols);
 
   await new Promise<void>((resolve, reject) => {
     let settled = false;
@@ -472,33 +425,5 @@ async function connectWebSocket(agentName: string, config: AgentConfig): Promise
     });
   });
 
-  return socket;
-}
-
-function splitFrames(data: string): string[] {
-  const lines = data.includes('\n') ? data.split('\n') : [data];
-  return lines.map((line) => line.trim()).filter((line) => line.length > 0);
-}
-
-function buildSubprotocols(headers?: Record<string, string>): string[] {
-  const protocols: string[] = [ACP_SUBPROTOCOL];
-  const auth = headers ? pickHeader(headers, 'authorization') : undefined;
-  if (!auth) return protocols;
-
-  const match = /^Bearer\s+(.+)$/i.exec(auth.trim());
-  if (match) {
-    protocols.push(`bearer.${match[1].replace(/\s+/g, '')}`);
-  }
-  return protocols;
-}
-
-function pickHeader(
-  headers: Record<string, string>,
-  name: string
-): string | undefined {
-  const target = name.toLowerCase();
-  for (const [key, value] of Object.entries(headers)) {
-    if (key.toLowerCase() === target) return value;
-  }
-  return undefined;
+  return new AcpClientBridge(socket);
 }

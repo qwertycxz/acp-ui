@@ -2,7 +2,6 @@
 import { ref, computed } from 'vue';
 import { useConfigStore } from '../stores/config';
 import { addAgent, removeAgent, updateAgent } from '../lib/host';
-import { getTransportKind, type AgentTransportKind } from '../lib/types';
 import EnvVarEditor from './EnvVarEditor.vue';
 
 const emit = defineEmits<{
@@ -13,26 +12,22 @@ const configStore = useConfigStore();
 
 interface AgentRow {
   name: string;
-  transport: AgentTransportKind;
   url: string;
   headers: Record<string, string>;
 }
 
-const agents = computed<AgentRow[]>(() => {
-  const entries = Object.entries(configStore.config.agents);
-  return entries.map(([name, config]) => ({
+const agents = computed<AgentRow[]>(() =>
+  Object.entries(configStore.config.agents).map(([name, config]) => ({
     name,
-    transport: getTransportKind(config),
     url: config.url ?? '',
     headers: config.headers ?? {},
-  }));
-});
+  }))
+);
 
 // Form state
 const showAddForm = ref(false);
 const editingAgent = ref<string | null>(null);
 const formName = ref('');
-const formTransport = ref<AgentTransportKind>('websocket');
 const formUrl = ref('');
 const formHeaders = ref<Record<string, string>>({});
 const formError = ref('');
@@ -40,7 +35,6 @@ const isSubmitting = ref(false);
 
 function resetForm() {
   formName.value = '';
-  formTransport.value = 'websocket';
   formUrl.value = '';
   formHeaders.value = {};
   formError.value = '';
@@ -57,7 +51,6 @@ function startEdit(agent: AgentRow) {
   resetForm();
   editingAgent.value = agent.name;
   formName.value = agent.name;
-  formTransport.value = agent.transport;
   formUrl.value = agent.url;
   formHeaders.value = { ...agent.headers };
 }
@@ -76,13 +69,11 @@ async function handleSubmit() {
     return;
   }
 
-  const transport = formTransport.value;
   if (!formUrl.value.trim()) {
     formError.value = 'URL is required for remote agents';
     return;
   }
-  const lower = formUrl.value.trim().toLowerCase();
-  if (!(lower.startsWith('ws://') || lower.startsWith('wss://'))) {
+  if (!/^(ws|wss):\/\//i.test(formUrl.value.trim())) {
     formError.value = 'WebSocket URL must start with ws:// or wss://';
     return;
   }
@@ -90,15 +81,13 @@ async function handleSubmit() {
   isSubmitting.value = true;
 
   try {
-    const remoteOpts = {
-      transport,
-      url: formUrl.value.trim(),
-      headers: Object.keys(formHeaders.value).length > 0 ? formHeaders.value : undefined,
-    };
-
     if (editingAgent.value) {
-      const newConfig = await updateAgent(formName.value, null, [], {}, remoteOpts);
-      configStore.updateFromEvent(newConfig);
+      configStore.updateFromEvent(
+        await updateAgent(formName.value, {
+          url: formUrl.value.trim(),
+          headers: Object.keys(formHeaders.value).length > 0 ? formHeaders.value : undefined,
+        })
+      );
     } else {
       // Check for duplicates
       if (configStore.config.agents[formName.value]) {
@@ -106,8 +95,12 @@ async function handleSubmit() {
         isSubmitting.value = false;
         return;
       }
-      const newConfig = await addAgent(formName.value, null, [], {}, remoteOpts);
-      configStore.updateFromEvent(newConfig);
+      configStore.updateFromEvent(
+        await addAgent(formName.value, {
+          url: formUrl.value.trim(),
+          headers: Object.keys(formHeaders.value).length > 0 ? formHeaders.value : undefined,
+        })
+      );
     }
     resetForm();
   } catch (e) {
@@ -121,8 +114,7 @@ async function handleDelete(name: string) {
   if (!confirm(`Delete agent "${name}"?`)) return;
 
   try {
-    const newConfig = await removeAgent(name);
-    configStore.updateFromEvent(newConfig);
+    configStore.updateFromEvent(await removeAgent(name));
   } catch (e) {
     console.error('Failed to delete agent:', e);
   }
@@ -158,13 +150,6 @@ async function handleDelete(name: string) {
                 placeholder="My Agent"
                 :disabled="!!editingAgent"
               />
-            </div>
-
-            <div class="form-group">
-              <label>Transport</label>
-              <select v-model="formTransport">
-                <option value="websocket">websocket (remote)</option>
-              </select>
             </div>
 
             <div class="form-group">
@@ -217,7 +202,7 @@ async function handleDelete(name: string) {
               <div class="agent-info">
                 <div class="agent-name">
                   {{ agent.name }}
-                  <span class="agent-transport-badge" :data-kind="agent.transport">{{ agent.transport }}</span>
+                  <span class="agent-transport-badge">websocket</span>
                 </div>
                 <div class="agent-command">
                   <code>{{ agent.url }}</code>
@@ -239,11 +224,6 @@ async function handleDelete(name: string) {
           </div>
         </section>
 
-        <section class="config-section">
-          <h3>Config File</h3>
-          <p class="config-path">{{ configStore.configPath }}</p>
-          <small>Changes to this file are automatically reloaded.</small>
-        </section>
       </div>
     </div>
   </div>
@@ -514,29 +494,4 @@ async function handleDelete(name: string) {
   color: var(--text-muted);
 }
 
-.config-section {
-  margin-top: 1.5rem;
-  padding-top: 1.5rem;
-  border-top: 1px solid var(--border-color);
-}
-
-.config-section h3 {
-  margin: 0 0 0.5rem 0;
-}
-
-.config-path {
-  font-family: monospace;
-  font-size: 0.8rem;
-  color: var(--text-secondary);
-  background: var(--bg-sidebar);
-  padding: 0.5rem;
-  border-radius: 4px;
-  word-break: break-all;
-  margin-bottom: 0.25rem;
-}
-
-.config-section small {
-  font-size: 0.75rem;
-  color: var(--text-muted);
-}
 </style>

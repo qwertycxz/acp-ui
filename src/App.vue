@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onBeforeUnmount } from 'vue';
-import { canPickFolder, pickFolder, loadKvStore, type KVStore } from './lib/host';
+import { loadKvStore, type KVStore } from './lib/host';
 import { useConfigStore } from './stores/config';
 import { useSessionStore } from './stores/session';
 import AgentSelector from './components/AgentSelector.vue';
@@ -18,9 +18,6 @@ const sessionStore = useSessionStore();
 
 const selectedAgent = ref('');
 const selectedCwd = ref('');
-// In the browser there is no native folder picker. The cwd refers to a path on
-// the agent's machine, so expose a free-text field.
-const folderPickerAvailable = canPickFolder();
 const showSidebar = ref(true);
 const showSettings = ref(false);
 const showTrafficMonitor = ref(false);
@@ -112,7 +109,6 @@ onMounted(async () => {
 
   // Initialize stores
   await configStore.loadConfig();
-  await configStore.setupHotReload();
   await sessionStore.initStore();
 
   const savedCwd = await prefsStore.get<string>('lastCwd');
@@ -131,22 +127,6 @@ onMounted(async () => {
     window.addEventListener('online', handleOnline);
   }
 });
-
-async function handleAgentSelect(agentName: string) {
-  selectedAgent.value = agentName;
-}
-
-async function handleSelectFolder() {
-  const folder = await pickFolder('Select Working Directory');
-  if (folder) {
-    selectedCwd.value = folder;
-    // Persist the selection
-    if (prefsStore) {
-      await prefsStore.set('lastCwd', folder);
-      await prefsStore.save();
-    }
-  }
-}
 
 /** Persist a typed cwd as the user edits it (mobile / web field). */
 async function handleCwdInput(event: Event) {
@@ -280,31 +260,12 @@ function clearError() {
         <div class="section">
           <AgentSelector
             v-model:selected="selectedAgent"
-            @select="handleAgentSelect"
           />
 
           <!-- Working Directory Picker -->
           <div class="cwd-picker">
             <label>Working Directory:</label>
-            <!-- Native hosts would use a read-only display + folder picker. -->
-            <div v-if="folderPickerAvailable" class="cwd-row">
-              <span class="cwd-path" :title="selectedCwd || 'Current directory'">
-                {{ selectedCwd ? selectedCwd.split(/[\\/]/).pop() : '.' }}
-              </span>
-              <button
-                class="cwd-btn"
-                @click="handleSelectFolder"
-                title="Select folder"
-                :disabled="isConnecting || isConnected"
-              >
-                📁
-              </button>
-            </div>
-            <!-- Browser: free-text input. The cwd is interpreted by
-                 the remote agent, so the path must exist on the agent's
-                 machine. -->
             <input
-              v-else
               class="cwd-input"
               type="text"
               :value="selectedCwd"
@@ -610,43 +571,6 @@ html, body, #app {
   font-size: 0.8rem;
   color: var(--text-secondary);
   margin-bottom: 0.25rem;
-}
-
-.cwd-row {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-}
-
-.cwd-path {
-  flex: 1;
-  padding: 0.375rem 0.5rem;
-  background: var(--bg-main);
-  border: 1px solid var(--border-color);
-  border-radius: 4px;
-  font-size: 0.8rem;
-  color: var(--text-primary);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.cwd-btn {
-  padding: 0.375rem 0.5rem;
-  border: 1px solid var(--border-color);
-  border-radius: 4px;
-  background: transparent;
-  cursor: pointer;
-  font-size: 1rem;
-}
-
-.cwd-btn:hover:not(:disabled) {
-  background: var(--bg-hover);
-}
-
-.cwd-btn:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
 }
 
 /* Browser free-text cwd input. */

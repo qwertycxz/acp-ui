@@ -2,18 +2,16 @@
 import { defineStore } from 'pinia';
 import { ref, computed, watch } from 'vue';
 import { loadKvStore, type KVStore } from '../lib/host/storage';
-import { getAppVersion } from '../lib/host';
 import type { SavedSession, ChatMessage, ToolCallInfo, PermissionRequest, SessionMode, SlashCommand, ModelInfo, AgentConfig } from '../lib/types';
 import { AcpClientBridge, createAcpClient } from '../lib/acp-bridge';
-import { hasLocalFs } from '../lib/platform';
 import { useConfigStore } from './config';
 import type { SessionNotification, AuthMethod } from '@agentclientprotocol/sdk';
 
 const STORE_PATH = 'sessions.json';
 const PROTOCOL_VERSION = 1;
 
-// App version (loaded once at startup)
-let appVersion = '0.1.0';
+const appVersion =
+  (import.meta.env as Record<string, string | undefined>).VITE_APP_VERSION ?? '0.0.0-web';
 
 export const useSessionStore = defineStore('session', () => {
   // State
@@ -76,13 +74,6 @@ export const useSessionStore = defineStore('session', () => {
     const saved = await store.get<SavedSession[]>('sessions');
     if (saved) {
       savedSessions.value = saved;
-    }
-
-    // Load app version injected at build time.
-    try {
-      appVersion = await getAppVersion();
-    } catch (e) {
-      console.warn('Failed to get app version:', e);
     }
   }
 
@@ -306,14 +297,12 @@ export const useSessionStore = defineStore('session', () => {
         throw new Error('Connection cancelled');
       }
 
-      const canAccessFs = hasLocalFs();
-
       const initResponse = await acpClient.initialize({
         protocolVersion: PROTOCOL_VERSION,
         clientCapabilities: {
           fs: {
-            readTextFile: canAccessFs,
-            writeTextFile: canAccessFs,
+            readTextFile: false,
+            writeTextFile: false,
           },
         },
         clientInfo: {
@@ -474,15 +463,13 @@ export const useSessionStore = defineStore('session', () => {
         { immediate: true }
       );
 
-      const canAccessFs = hasLocalFs();
-
       // Initialize connection
       const initResponse = await acpClient.initialize({
         protocolVersion: PROTOCOL_VERSION,
         clientCapabilities: {
           fs: {
-            readTextFile: canAccessFs,
-            writeTextFile: canAccessFs,
+            readTextFile: false,
+            writeTextFile: false,
           },
         },
         clientInfo: {
