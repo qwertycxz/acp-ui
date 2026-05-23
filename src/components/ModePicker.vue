@@ -14,16 +14,16 @@ const emit = defineEmits<{
 
 const isOpen = ref(false);
 
-const currentMode = computed(() => 
+const currentMode = computed(() =>
   props.modes.find(m => m.id === props.currentModeId)
 );
 
 function getModeIcon(modeId: string): string {
   switch (modeId.toLowerCase()) {
     case 'ask': return '🎯';
-    case 'architect': 
+    case 'architect':
     case 'plan': return '📐';
-    case 'code': 
+    case 'code':
     case 'auto': return '💻';
     case 'debug': return '🐛';
     case 'review': return '👀';
@@ -59,7 +59,7 @@ if (typeof window !== 'undefined') {
 
 <template>
   <div class="mode-picker" :class="{ disabled }">
-    <button 
+    <button
       class="mode-button"
       :disabled="disabled"
       @click.stop="toggleDropdown"
@@ -68,10 +68,10 @@ if (typeof window !== 'undefined') {
       <span class="mode-name">{{ currentMode?.name || currentModeId }}</span>
       <span class="dropdown-arrow">{{ isOpen ? '▲' : '▼' }}</span>
     </button>
-    
+
     <Transition name="dropdown">
       <div v-if="isOpen" class="dropdown-menu" @click.stop>
-        <div 
+        <div
           v-for="mode in modes"
           :key="mode.id"
           :class="['dropdown-item', { selected: mode.id === currentModeId }]"
@@ -164,7 +164,7 @@ if (typeof window !== 'undefined') {
 @media (max-width: 800px) {
   .dropdown-menu {
     position: fixed;
-    top: calc(env(safe-area-inset-top, 0px) + 4rem);
+    top: calc(env(safe-area-inset-top, 0) + 4rem);
     left: 0.5rem;
     right: 0.5rem;
     bottom: auto;

@@ -14,8 +14,8 @@ const selectedAgent = defineModel<string>('selected', { default: '' });
 const agents = computed(() => configStore.agentNames);
 const hasAgents = computed(() => configStore.hasAgents);
 const configPath = computed(() => configStore.configPath);
-// On mobile / web the config-file path is not actionable (sandbox /
-// localStorage). Point users at the Settings dialog instead of the path.
+// Browser config lives in localStorage, so point users at Settings instead of
+// a filesystem path.
 const restricted = restrictedTransports();
 
 /** Build the display label for each agent once, instead of calling
@@ -24,7 +24,7 @@ const agentLabels = computed<Record<string, string>>(() => {
   const out: Record<string, string> = {};
   for (const name of agents.value) {
     const kind = configStore.getAgentTransportKind(name);
-    out[name] = kind === 'stdio' ? name : `${name} (${kind})`;
+    out[name] = `${name} (${kind})`;
   }
   return out;
 });
@@ -49,8 +49,8 @@ function handleSelect(event: Event) {
 <template>
   <div class="agent-selector">
     <label for="agent-select">Agent:</label>
-    <select 
-      id="agent-select" 
+    <select
+      id="agent-select"
       :value="selectedAgent"
       @change="handleSelect"
       :disabled="!hasAgents"
@@ -62,7 +62,7 @@ function handleSelect(event: Event) {
         {{ agentLabels[agent] }}
       </option>
     </select>
-    
+
     <div v-if="!hasAgents" class="config-hint">
       <template v-if="restricted">
         <p>No remote agents configured.</p>

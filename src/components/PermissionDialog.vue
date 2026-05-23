@@ -26,16 +26,16 @@ function handleCancel() {
         <span class="icon">🔐</span>
         <h3>Permission Required</h3>
       </div>
-      
+
       <div class="dialog-content">
         <div class="tool-info">
           <span class="tool-title">{{ request.toolCall.title }}</span>
           <span class="tool-kind">{{ request.toolCall.kind }}</span>
         </div>
-        
+
         <div v-if="request.toolCall.locations?.length" class="locations">
-          <div 
-            v-for="(loc, index) in request.toolCall.locations" 
+          <div
+            v-for="(loc, index) in request.toolCall.locations"
             :key="index"
             class="location"
           >
@@ -43,10 +43,10 @@ function handleCancel() {
           </div>
         </div>
       </div>
-      
+
       <div class="dialog-actions">
-        <button 
-          v-for="option in request.options" 
+        <button
+          v-for="option in request.options"
           :key="option.optionId"
           :class="['option-btn', `option-${option.kind}`]"
           @click="handleSelect(option.optionId)"

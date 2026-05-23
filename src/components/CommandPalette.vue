@@ -19,7 +19,7 @@ const selectedIndex = ref(0);
 const filteredCommands = computed(() => {
   const filterText = props.filter.toLowerCase();
   if (!filterText) return props.commands;
-  return props.commands.filter(cmd => 
+  return props.commands.filter(cmd =>
     cmd.name.toLowerCase().startsWith(filterText) ||
     cmd.description.toLowerCase().includes(filterText)
   );
@@ -32,7 +32,7 @@ watch([() => props.filter, () => props.visible], () => {
 
 function handleKeyDown(event: KeyboardEvent) {
   if (!props.visible || filteredCommands.value.length === 0) return;
-  
+
   switch (event.key) {
     case 'ArrowDown':
       event.preventDefault();
@@ -70,13 +70,13 @@ function selectCommand(cmd: SlashCommand) {
 </script>
 
 <template>
-  <div 
+  <div
     v-if="visible && filteredCommands.length > 0"
     ref="paletteRef"
     class="command-palette"
   >
     <div class="command-list">
-      <div 
+      <div
         v-for="(cmd, index) in filteredCommands"
         :key="cmd.name"
         :class="['command-item', { selected: index === selectedIndex }]"
@@ -90,7 +90,7 @@ function selectCommand(cmd: SlashCommand) {
       </div>
     </div>
     <!-- Tooltip on right side for selected item -->
-    <div 
+    <div
       v-if="filteredCommands[selectedIndex]?.description"
       class="command-tooltip"
     >

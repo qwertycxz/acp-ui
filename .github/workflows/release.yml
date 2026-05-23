@@ -151,9 +151,9 @@ jobs:
           releaseName: 'ACP UI v${{ needs.update-version.outputs.version || needs.get-version.outputs.version || inputs.version }}'
           releaseBody: |
             ## What's New
-            
+
             See the assets below to download ACP UI for your platform.
-            
+
             ### Downloads
             - **Windows**: `.msi` (installer) or `.exe` (NSIS)
             - **macOS**: `.dmg` (Intel or Apple Silicon)
@@ -279,7 +279,7 @@ jobs:
             VERSION="${GITHUB_REF#refs/tags/v}"
           fi
           echo "version=$VERSION" >> $GITHUB_OUTPUT
-          
+
           # Get the release ID
           RELEASE_ID=$(gh release view "v$VERSION" --json id -q '.id' 2>/dev/null || echo "")
           echo "release_id=$RELEASE_ID" >> $GITHUB_OUTPUT

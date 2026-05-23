@@ -56,36 +56,36 @@ const isLongWait = computed(() => props.elapsedSeconds > 10);
       <span class="agent-name">Connecting to {{ agentName }}...</span>
       <span class="elapsed-time">{{ formattedTime }}</span>
     </div>
-    
+
     <div class="progress-status">
       <span class="phase-icon">{{ phaseIcon }}</span>
       <span class="phase-text">{{ phaseText }}</span>
     </div>
-    
+
     <div v-if="isLongWait && !showDetails" class="first-run-hint">
       First run may take longer while dependencies are installed.
     </div>
-    
+
     <div class="progress-actions">
-      <button 
+      <button
         class="details-btn"
         @click="emit('toggleDetails')"
       >
         {{ showDetails ? 'Hide Details ▲' : 'Show Details ▼' }}
       </button>
-      <button 
+      <button
         class="cancel-btn"
         @click="emit('cancel')"
       >
         Cancel
       </button>
     </div>
-    
+
     <div v-if="showDetails" class="logs-container">
       <div class="logs-header">Output</div>
       <div class="logs-content">
-        <div 
-          v-for="(log, index) in logs.slice(-50)" 
+        <div
+          v-for="(log, index) in logs.slice(-50)"
           :key="index"
           class="log-line"
         >

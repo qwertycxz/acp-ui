@@ -19,9 +19,8 @@ const sessionStore = useSessionStore();
 
 const selectedAgent = ref('');
 const selectedCwd = ref('');
-// On mobile / web there is no native folder picker (and the cwd refers to
-// a path on the *agent's* machine, not the local device), so we expose a
-// free-text field instead of the picker button.
+// In the browser there is no native folder picker. The cwd refers to a path on
+// the agent's machine, so expose a free-text field.
 const folderPickerAvailable = canPickFolder();
 const showSidebar = ref(true);
 const showSettings = ref(false);
@@ -38,10 +37,8 @@ function syncNarrowLayout() {
   if (narrowMql) isNarrowLayout.value = narrowMql.matches;
 }
 
-// Foreground-reconnect plumbing. Mobile OSes freeze the WebView when the
-// app is backgrounded and routers may drop the idle TCP connection while
-// we're away. When the user returns we ask the session store to silently
-// reattach to the last session if we have one.
+// Foreground-reconnect plumbing. Browsers may drop idle TCP connections while
+// a tab is backgrounded, so try to reattach when the user returns.
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 function scheduleReconnect() {
   // Coalesce rapid visibility/online flips into a single attempt.
@@ -113,16 +110,16 @@ onMounted(async () => {
 
   // Load persisted preferences first
   prefsStore = await loadKvStore('preferences.json');
-  
+
   // Initialize telemetry (check user preference)
   const telemetryEnabled = await prefsStore.get<boolean>('telemetryEnabled') ?? true;
   await initTelemetry(telemetryEnabled);
-  
+
   // Initialize stores
   await configStore.loadConfig();
   await configStore.setupHotReload();
   await sessionStore.initStore();
-  
+
   const savedCwd = await prefsStore.get<string>('lastCwd');
   if (savedCwd) {
     selectedCwd.value = savedCwd;
@@ -272,35 +269,35 @@ function clearError() {
       <div class="sidebar-header">
         <h1>ACP UI</h1>
         <div class="header-actions">
-          <button 
-            class="settings-btn" 
+          <button
+            class="settings-btn"
             :class="{ active: showTrafficMonitor }"
-            @click="showTrafficMonitor = !showTrafficMonitor" 
+            @click="showTrafficMonitor = !showTrafficMonitor"
             title="ACP Traffic Monitor"
           >📡</button>
           <button class="settings-btn" @click="showSettings = true" title="Settings">⚙</button>
           <button class="toggle-btn" @click="toggleSidebar">◀</button>
         </div>
       </div>
-      
+
       <div class="sidebar-content">
         <!-- Agent Selection -->
         <div class="section">
-          <AgentSelector 
+          <AgentSelector
             v-model:selected="selectedAgent"
             @select="handleAgentSelect"
           />
-          
+
           <!-- Working Directory Picker -->
           <div class="cwd-picker">
             <label>Working Directory:</label>
-            <!-- Desktop: read-only display + folder picker. -->
+            <!-- Native hosts would use a read-only display + folder picker. -->
             <div v-if="folderPickerAvailable" class="cwd-row">
               <span class="cwd-path" :title="selectedCwd || 'Current directory'">
                 {{ selectedCwd ? selectedCwd.split(/[\\/]/).pop() : '.' }}
               </span>
-              <button 
-                class="cwd-btn" 
+              <button
+                class="cwd-btn"
                 @click="handleSelectFolder"
                 title="Select folder"
                 :disabled="isConnecting || isConnected"
@@ -308,7 +305,7 @@ function clearError() {
                 📁
               </button>
             </div>
-            <!-- Mobile / web: free-text input. The cwd is interpreted by
+            <!-- Browser: free-text input. The cwd is interpreted by
                  the remote agent, so the path must exist on the agent's
                  machine. -->
             <input
@@ -324,8 +321,8 @@ function clearError() {
               spellcheck="false"
             />
           </div>
-          
-          <button 
+
+          <button
             v-if="hasAgents && !isConnected && !isConnecting"
             class="new-session-btn"
             :disabled="!selectedAgent || isLoading"
@@ -333,9 +330,9 @@ function clearError() {
           >
             {{ isLoading ? 'Connecting...' : 'New Session' }}
           </button>
-          
+
           <!-- Startup Progress -->
-          <StartupProgress 
+          <StartupProgress
             v-if="isConnecting"
             :agent-name="selectedAgent"
             :phase="sessionStore.startupPhase"
@@ -345,8 +342,8 @@ function clearError() {
             @cancel="handleCancelConnection"
             @toggle-details="showStartupDetails = !showStartupDetails"
           />
-          
-          <button 
+
+          <button
             v-if="isConnected"
             class="disconnect-btn"
             @click="handleDisconnect"
@@ -354,17 +351,17 @@ function clearError() {
             Disconnect
           </button>
         </div>
-        
+
         <!-- Session List -->
         <div class="section">
-          <SessionList 
+          <SessionList
             @resume="handleResumeSession"
             @delete="handleDeleteSession"
           />
         </div>
       </div>
     </aside>
-    
+
     <!-- Backdrop behind the drawer on narrow viewports. Only intercepts
          taps when the layout is narrow; on desktop it's display:none. -->
     <div
@@ -384,14 +381,14 @@ function clearError() {
     >☰</button>
 
     <!-- Collapsed sidebar toggle -->
-    <button 
-      v-if="!showSidebar" 
+    <button
+      v-if="!showSidebar"
       class="sidebar-toggle-collapsed"
       @click="toggleSidebar"
     >
       ▶
     </button>
-    
+
     <!-- Main Content Area -->
     <div class="main-area">
       <main class="main-content">
@@ -417,10 +414,10 @@ function clearError() {
           >Reconnect</button>
           <button class="error-close" @click="clearError" title="Dismiss">×</button>
         </div>
-        
+
         <!-- Chat View when connected -->
         <ChatView v-if="isConnected" />
-        
+
         <!-- Welcome screen when not connected -->
         <div v-else class="welcome-screen">
           <h2>Welcome to ACP UI</h2>
@@ -430,15 +427,15 @@ function clearError() {
           </p>
         </div>
       </main>
-      
+
       <!-- Traffic Monitor Panel -->
       <div v-if="showTrafficMonitor" class="traffic-panel">
         <TrafficMonitor @close="showTrafficMonitor = false" />
       </div>
     </div>
-    
+
     <!-- Permission Dialog -->
-    <PermissionDialog 
+    <PermissionDialog
       v-if="pendingPermission"
       :request="pendingPermission"
       @select="handlePermissionSelect"
@@ -446,7 +443,7 @@ function clearError() {
     />
 
     <!-- Auth Method Dialog -->
-    <AuthMethodDialog 
+    <AuthMethodDialog
       v-if="pendingAuthMethods.length > 0"
       :auth-methods="pendingAuthMethods"
       :agent-name="pendingAuthAgentName"
@@ -455,7 +452,7 @@ function clearError() {
     />
 
     <!-- Settings -->
-    <SettingsView 
+    <SettingsView
       v-if="showSettings"
       @close="showSettings = false"
     />
@@ -481,7 +478,7 @@ function clearError() {
   --text-accent: #0066cc;
   --text-code: #abb2bf;
   --border-color: #e0e0e0;
-  
+
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
   font-size: 16px;
   line-height: 1.5;
@@ -657,7 +654,7 @@ html, body, #app {
   cursor: not-allowed;
 }
 
-/* Mobile-only free-text cwd input. */
+/* Browser free-text cwd input. */
 .cwd-input {
   width: 100%;
   padding: 0.5rem 0.6rem;
@@ -857,7 +854,7 @@ html, body, #app {
      a tinted continuation of the banner instead of clipping its content. */
   .reconnect-banner,
   .error-banner {
-    padding-top: calc(0.75rem + env(safe-area-inset-top, 0px));
+    padding-top: calc(0.75rem + env(safe-area-inset-top, 0));
   }
 
   .sidebar.is-drawer {
@@ -870,7 +867,7 @@ html, body, #app {
     z-index: 100;
     box-shadow: 2px 0 16px rgba(0, 0, 0, 0.3);
     /* Honour iOS notch / Android status bar. */
-    padding-top: env(safe-area-inset-top, 0px);
+    padding-top: env(safe-area-inset-top, 0);
   }
 
   .drawer-backdrop {
@@ -891,7 +888,7 @@ html, body, #app {
     align-items: center;
     justify-content: center;
     position: fixed;
-    top: calc(env(safe-area-inset-top, 0px) + 0.5rem);
+    top: calc(env(safe-area-inset-top, 0) + 0.5rem);
     left: 0.5rem;
     z-index: 50;
     width: 44px;
@@ -915,7 +912,7 @@ html, body, #app {
 
   /* Honour the iOS home indicator at the bottom of the main area. */
   .main-area {
-    padding-bottom: env(safe-area-inset-bottom, 0px);
+    padding-bottom: env(safe-area-inset-bottom, 0);
   }
 }
 </style>

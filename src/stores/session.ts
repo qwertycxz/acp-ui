@@ -5,10 +5,8 @@ import { loadKvStore, type KVStore } from '../lib/host/storage';
 import { getAppVersion } from '../lib/host';
 import { trackEvent, trackError } from '../lib/telemetry';
 import type { SavedSession, ChatMessage, ToolCallInfo, PermissionRequest, SessionMode, SlashCommand, ModelInfo, AgentConfig } from '../lib/types';
-import { getTransportKind } from '../lib/types';
 import { AcpClientBridge, createAcpClient } from '../lib/acp-bridge';
-import { onAgentStderr, spawnAgent, killAgent } from '../lib/host';
-import { isDesktop } from '../lib/platform';
+import { hasLocalFs } from '../lib/platform';
 import { useConfigStore } from './config';
 import type { SessionNotification, AuthMethod } from '@agentclientprotocol/sdk';
 
@@ -17,24 +15,6 @@ const PROTOCOL_VERSION = 1;
 
 // App version (loaded once at startup)
 let appVersion = '0.1.0';
-
-// Startup phase detection patterns
-function detectPhase(line: string): string | null {
-  const lower = line.toLowerCase();
-  if (lower.includes('download') || lower.includes('fetch') || lower.includes('get ')) {
-    return 'downloading';
-  }
-  if (lower.includes('install') || lower.includes('added') || lower.includes('packages')) {
-    return 'installing';
-  }
-  if (lower.includes('build') || lower.includes('compil')) {
-    return 'building';
-  }
-  if (lower.includes('start') || lower.includes('spawn')) {
-    return 'starting';
-  }
-  return null;
-}
 
 export const useSessionStore = defineStore('session', () => {
   // State
@@ -48,37 +28,36 @@ export const useSessionStore = defineStore('session', () => {
   // True while a foreground reconnect attempt is in flight. Distinct from
   // `isConnecting` (which is the multi-phase initial spawn/connect path):
   // reconnects skip the spawn/stderr-progress UI and just need a small
-  // "Reconnecting…" indicator.
+  // "Reconnecting鈥? indicator.
   const isReconnecting = ref(false);
   const error = ref<string | null>(null);
   const pendingPermission = ref<PermissionRequest | null>(null);
-  
+
   // Authentication state
   const pendingAuthMethods = ref<AuthMethod[]>([]);
   const pendingAuthAgentName = ref<string>('');
   let authMethodResolver: ((methodId: string | null) => void) | null = null;
-  
+
   // Session modes
   const availableModes = ref<SessionMode[]>([]);
   const currentModeId = ref<string>('');
-  
+
   // Slash commands
   const availableCommands = ref<SlashCommand[]>([]);
-  
+
   // Session models
   const availableModels = ref<ModelInfo[]>([]);
   const currentModelId = ref<string>('');
-  
+
   // Connection cancellation
   let connectionAborted = false;
-  
+
   // Startup progress tracking
   const startupPhase = ref<string>('starting');
   const startupLogs = ref<string[]>([]);
   const startupElapsed = ref<number>(0);
   let startupTimer: ReturnType<typeof setInterval> | null = null;
-  let stderrUnlisten: (() => void) | null = null;
-  
+
   // Current ACP client
   let acpClient: AcpClientBridge | null = null;
   let store: KVStore | null = null;
@@ -88,7 +67,7 @@ export const useSessionStore = defineStore('session', () => {
   const messageList = computed(() => messages.value);
   const toolCallList = computed(() => Array.from(toolCalls.value.values()));
   // Only sessions that support resuming (loadSession capability)
-  const resumableSessions = computed(() => 
+  const resumableSessions = computed(() =>
     savedSessions.value.filter(s => s.supportsLoadSession === true)
   );
 
@@ -99,8 +78,8 @@ export const useSessionStore = defineStore('session', () => {
     if (saved) {
       savedSessions.value = saved;
     }
-    
-    // Load app version (Tauri API on desktop/mobile, build-time inject on web)
+
+    // Load app version injected at build time.
     try {
       appVersion = await getAppVersion();
     } catch (e) {
@@ -121,7 +100,7 @@ export const useSessionStore = defineStore('session', () => {
   // a clear "disconnected" signal instead of a stale "connected" view.
   function handleUnexpectedClose(reason?: string): void {
     // If `acpClient` is already null, this fired during a voluntary
-    // disconnect that's tearing down anyway — nothing to do.
+    // disconnect that's tearing down anyway 鈥?nothing to do.
     if (!acpClient) return;
     acpClient = null;
     isConnected.value = false;
@@ -133,7 +112,7 @@ export const useSessionStore = defineStore('session', () => {
   // Session update handler
   function handleSessionUpdate(notification: SessionNotification) {
     const update = notification.update;
-    
+
     switch (update.sessionUpdate) {
       case 'user_message_chunk':
         // Append to last user message or create new (for replay)
@@ -291,95 +270,31 @@ export const useSessionStore = defineStore('session', () => {
     connectionAborted = false;
     error.value = null;
 
-    // Look up the agent's transport kind so we know whether to do the
-    // stdio-only startup choreography (spawn → stderr progress) or the
-    // streamlined remote path (just open a network transport).
     const configStore = useConfigStore();
     const agentConfig: AgentConfig | undefined = configStore.getAgent(agentName);
-    const transportKind = agentConfig
-      ? getTransportKind(agentConfig)
-      : 'stdio';
-    const isRemote = transportKind !== 'stdio';
 
-    // Reset and start progress tracking
-    startupPhase.value = 'starting';
+    startupPhase.value = 'connecting';
     startupLogs.value = [];
     startupElapsed.value = 0;
     startupTimer = setInterval(() => {
       startupElapsed.value++;
     }, 1000);
 
-    // Track the spawned stdio instance separately so we can `killAgent` it
-    // if cancellation/abort happens before we've wrapped it in a bridge.
-    // Once `acpClient` is set, ownership transfers to the bridge and
-    // `acpClient.disconnect()` becomes the only correct cleanup path.
-    let spawnedInstance: { id: string } | null = null;
-
     try {
       if (!agentConfig) {
         throw new Error(`Agent '${agentName}' not found in config`);
       }
 
-      if (!isRemote) {
-        // For stdio agents we need the spawned process's id up front so the
-        // stderr listener can filter on it (multiple agents may be running
-        // concurrently). We spawn here, hand the resulting AgentInstance to
-        // a StdioTransport, then build the bridge from that transport.
-        startupPhase.value = 'starting';
-        const agentInstance = await spawnAgent(agentName);
-        spawnedInstance = agentInstance;
-
-        stderrUnlisten = await onAgentStderr((stderr) => {
-          if (stderr.agent_id !== agentInstance.id) return;
-          startupLogs.value.push(stderr.line);
-          // Detect phase from output
-          const detectedPhase = detectPhase(stderr.line);
-          if (detectedPhase) {
-            startupPhase.value = detectedPhase;
-          }
-        }) as unknown as () => void;
-
-        if (connectionAborted) {
-          // Process was spawned but no bridge exists yet — kill the orphan
-          // before throwing so the local agent doesn't keep running.
-          await killAgent(agentInstance.id).catch((err) =>
-            console.warn('killAgent during abort failed:', err)
-          );
-          spawnedInstance = null;
-          throw new Error('Connection cancelled');
-        }
-
-        startupPhase.value = 'initializing';
-
-        // Wrap the just-spawned instance in a StdioTransport. Using the
-        // legacy single-arg form keeps backward compatibility and avoids a
-        // double-spawn (StdioTransport.spawn would call spawnAgent again).
-        acpClient = await createAcpClient(agentInstance);
-        // Ownership of the child process now belongs to the bridge — clear
-        // our local reference so the catch block doesn't double-kill it.
-        spawnedInstance = null;
-      } else {
-        // Remote agents have no stderr stream; show a minimal "connecting"
-        // state instead of the multi-phase progress UI.
-        startupPhase.value = 'connecting';
-
-        if (connectionAborted) {
-          throw new Error('Connection cancelled');
-        }
-
-        // The factory opens a WebSocket / HTTP connection based on
-        // agentConfig.transport.
-        acpClient = await createAcpClient({ name: agentName, config: agentConfig });
+      if (connectionAborted) {
+        throw new Error('Connection cancelled');
       }
 
+      acpClient = await createAcpClient({ name: agentName, config: agentConfig });
       acpClient.onSessionUpdate = handleSessionUpdate;
-      // Surface unexpected transport closes (e.g. WebSocket drop while idle)
-      // to the UI so users don't sit on a stale "connected" state forever.
       acpClient.onTransportClose = (reason) => {
         handleUnexpectedClose(reason);
       };
-      
-      // Sync bridge's pendingPermissionRequest to store's pendingPermission
+
       watch(
         () => acpClient?.pendingPermissionRequest.value,
         (newValue) => {
@@ -393,12 +308,7 @@ export const useSessionStore = defineStore('session', () => {
         throw new Error('Connection cancelled');
       }
 
-      startupPhase.value = 'connecting';
-
-      // Initialize connection
-      // Only Tauri desktop has real filesystem access; mobile and web
-      // cannot fulfil readTextFile / writeTextFile RPCs.
-      const canAccessFs = isDesktop();
+      const canAccessFs = hasLocalFs();
 
       const initResponse = await acpClient.initialize({
         protocolVersion: PROTOCOL_VERSION,
@@ -417,7 +327,6 @@ export const useSessionStore = defineStore('session', () => {
 
       console.log('Agent initialized:', initResponse);
 
-      // Check if agent supports session loading
       const supportsLoadSession = initResponse.agentCapabilities?.loadSession ?? false;
 
       if (connectionAborted) {
@@ -425,7 +334,6 @@ export const useSessionStore = defineStore('session', () => {
         throw new Error('Connection cancelled');
       }
 
-      // Store available auth methods for potential retry
       const availableAuthMethods = initResponse.authMethods || [];
 
       if (connectionAborted) {
@@ -433,7 +341,6 @@ export const useSessionStore = defineStore('session', () => {
         throw new Error('Connection cancelled');
       }
 
-      // Try to create session - may fail with auth_required
       let sessionResponse;
       try {
         sessionResponse = await acpClient.newSession({
@@ -441,22 +348,20 @@ export const useSessionStore = defineStore('session', () => {
           mcpServers: [],
         });
       } catch (sessionError: unknown) {
-        // Check if auth is required (error code -32000)
         const errorMessage = sessionError instanceof Error ? sessionError.message : String(sessionError);
         const isAuthRequired = errorMessage.toLowerCase().includes('authentication required') ||
                                errorMessage.includes('-32000');
-        
+
         if (isAuthRequired && availableAuthMethods.length > 0) {
           console.log('Authentication required, available methods:', availableAuthMethods);
-          
-          // Prompt user to select auth method
+
           const selectedMethodId = await promptForAuthMethod(availableAuthMethods, agentName);
-          
+
           if (!selectedMethodId || connectionAborted) {
             await acpClient.disconnect();
             throw new Error('Authentication cancelled by user');
           }
-          
+
           console.log('Authenticating with method:', selectedMethodId);
           const authResponse = await acpClient.authenticate({
             methodId: selectedMethodId,
@@ -468,7 +373,6 @@ export const useSessionStore = defineStore('session', () => {
             throw new Error('Connection cancelled');
           }
 
-          // Retry session creation after auth
           sessionResponse = await acpClient.newSession({
             cwd,
             mcpServers: [],
@@ -478,7 +382,6 @@ export const useSessionStore = defineStore('session', () => {
         }
       }
 
-      // Save session
       const session: SavedSession = {
         id: crypto.randomUUID(),
         agentName,
@@ -492,15 +395,13 @@ export const useSessionStore = defineStore('session', () => {
       currentSession.value = session;
       savedSessions.value.push(session);
       await saveSessionsToStore();
-      
+
       isConnected.value = true;
       messages.value = [];
       toolCalls.value.clear();
-      
-      // Track successful session creation
+
       trackEvent('SessionCreated', { agentName, success: 'true' });
-      
-      // Set up session modes if available
+
       if (sessionResponse.modes) {
         availableModes.value = (sessionResponse.modes.availableModes || []).map(m => ({
           id: m.id,
@@ -513,7 +414,6 @@ export const useSessionStore = defineStore('session', () => {
         currentModeId.value = '';
       }
 
-      // Set up session models if available
       if (sessionResponse.models) {
         availableModels.value = (sessionResponse.models.availableModels || []).map(m => ({
           modelId: m.modelId,
@@ -525,46 +425,28 @@ export const useSessionStore = defineStore('session', () => {
         availableModels.value = [];
         currentModelId.value = '';
       }
-
     } catch (e) {
       error.value = e instanceof Error ? e.message : String(e);
-      // Tear down whichever side of the connection is live. The bridge owns
-      // the spawned process once it exists, so prefer disconnecting it.
-      // Otherwise (e.g. abort right after spawn but before bridge creation)
-      // kill the orphaned local agent directly.
       if (acpClient) {
         try {
           await acpClient.disconnect();
         } catch (cleanupErr) {
           console.warn('disconnect during createSession cleanup failed:', cleanupErr);
         }
-      } else if (spawnedInstance) {
-        try {
-          await killAgent(spawnedInstance.id);
-        } catch (cleanupErr) {
-          console.warn('killAgent during createSession cleanup failed:', cleanupErr);
-        }
       }
       acpClient = null;
-      // Track session creation failure
       trackEvent('SessionCreated', { agentName, success: 'false' });
       trackError(e instanceof Error ? e : new Error(String(e)));
       throw e;
     } finally {
       isLoading.value = false;
       isConnecting.value = false;
-      // Clean up startup progress tracking
       if (startupTimer) {
         clearInterval(startupTimer);
         startupTimer = null;
       }
-      if (stderrUnlisten) {
-        stderrUnlisten();
-        stderrUnlisten = null;
-      }
     }
   }
-
   // Resume existing session
   async function resumeSession(savedSession: SavedSession): Promise<void> {
     isLoading.value = true;
@@ -599,9 +481,7 @@ export const useSessionStore = defineStore('session', () => {
         { immediate: true }
       );
 
-      // Only Tauri desktop has real filesystem access; mobile and web
-      // cannot fulfil readTextFile / writeTextFile RPCs.
-      const canAccessFs = isDesktop();
+      const canAccessFs = hasLocalFs();
 
       // Initialize connection
       const initResponse = await acpClient.initialize({
@@ -638,18 +518,18 @@ export const useSessionStore = defineStore('session', () => {
         const errorMessage = sessionError instanceof Error ? sessionError.message : String(sessionError);
         const isAuthRequired = errorMessage.toLowerCase().includes('authentication required') ||
                                errorMessage.includes('-32000');
-        
+
         if (isAuthRequired && availableAuthMethods.length > 0) {
           console.log('Authentication required, available methods:', availableAuthMethods);
-          
+
           // Prompt user to select auth method
           const selectedMethodId = await promptForAuthMethod(availableAuthMethods, savedSession.agentName);
-          
+
           if (!selectedMethodId) {
             await acpClient.disconnect();
             throw new Error('Authentication cancelled by user');
           }
-          
+
           console.log('Authenticating with method:', selectedMethodId);
           const authResponse = await acpClient.authenticate({
             methodId: selectedMethodId,
@@ -680,9 +560,6 @@ export const useSessionStore = defineStore('session', () => {
 
     } catch (e) {
       error.value = e instanceof Error ? e.message : String(e);
-      // Disconnect the bridge if it was created — otherwise we leak the
-      // spawned stdio process or open WebSocket on initialize/loadSession
-      // failure.
       if (acpClient) {
         try {
           await acpClient.disconnect();
@@ -729,7 +606,7 @@ export const useSessionStore = defineStore('session', () => {
       console.log('Prompt completed:', response.stopReason);
 
       // Track prompt sent
-      trackEvent('PromptSent', { 
+      trackEvent('PromptSent', {
         messageLength: String(text.length),
         stopReason: response.stopReason || 'unknown',
       });
@@ -748,7 +625,7 @@ export const useSessionStore = defineStore('session', () => {
   // Cancel current operation
   async function cancelOperation(): Promise<void> {
     if (!acpClient || !currentSession.value) return;
-    
+
     await acpClient.cancel({
       sessionId: currentSession.value.sessionId,
     });
@@ -757,7 +634,7 @@ export const useSessionStore = defineStore('session', () => {
   // Cancel ongoing connection attempt
   async function cancelConnection(): Promise<void> {
     connectionAborted = true;
-    
+
     // Cancel auth selection if pending
     if (authMethodResolver) {
       authMethodResolver(null);
@@ -765,7 +642,7 @@ export const useSessionStore = defineStore('session', () => {
       pendingAuthMethods.value = [];
       pendingAuthAgentName.value = '';
     }
-    
+
     // Disconnect if client exists
     if (acpClient) {
       try {
@@ -775,7 +652,7 @@ export const useSessionStore = defineStore('session', () => {
       }
       acpClient = null;
     }
-    
+
     isLoading.value = false;
     isConnecting.value = false;
     error.value = null;
@@ -799,19 +676,19 @@ export const useSessionStore = defineStore('session', () => {
     const agentName = currentSession.value?.agentName || 'unknown';
     const sessionStart = currentSession.value?.lastUpdated || Date.now();
     const sessionDuration = Math.round((Date.now() - sessionStart) / 1000);
-    
+
     if (acpClient) {
       await acpClient.disconnect();
       acpClient = null;
     }
-    
+
     // Track session disconnect
-    trackEvent('SessionDisconnected', { 
+    trackEvent('SessionDisconnected', {
       agentName,
       sessionDurationSeconds: String(sessionDuration),
       messageCount: String(messages.value.length),
     });
-    
+
     currentSession.value = null;
     isConnected.value = false;
     messages.value = [];
@@ -834,12 +711,12 @@ export const useSessionStore = defineStore('session', () => {
     if (!acpClient || !currentSession.value) {
       throw new Error('No active session');
     }
-    
+
     await acpClient.setMode({
       sessionId: currentSession.value.sessionId,
       modeId,
     });
-    
+
     // Optimistically update the current mode
     currentModeId.value = modeId;
   }
@@ -849,12 +726,12 @@ export const useSessionStore = defineStore('session', () => {
     if (!acpClient || !currentSession.value) {
       throw new Error('No active session');
     }
-    
+
     await acpClient.unstable_setSessionModel({
       sessionId: currentSession.value.sessionId,
       modelId,
     });
-    
+
     // Optimistically update the current model
     currentModelId.value = modelId;
   }
@@ -877,7 +754,7 @@ export const useSessionStore = defineStore('session', () => {
    * would; the caller doesn't need to handle them.
    */
   async function tryReconnect(): Promise<boolean> {
-    // Already connected or already trying — leave it alone.
+    // Already connected or already trying 鈥?leave it alone.
     if (isConnected.value || isConnecting.value || isLoading.value) {
       return false;
     }
@@ -898,7 +775,7 @@ export const useSessionStore = defineStore('session', () => {
     }
 
     // Clear the stale "Connection lost" banner up-front so the UI shows
-    // an honest "Reconnecting…" state instead of a contradictory red
+    // an honest "Reconnecting鈥? state instead of a contradictory red
     // banner during the attempt. If the reconnect ultimately fails, the
     // catch below restores a real error message.
     error.value = null;
@@ -937,13 +814,13 @@ export const useSessionStore = defineStore('session', () => {
     startupPhase,
     startupLogs,
     startupElapsed,
-    
+
     // Computed
     hasActiveSession,
     messageList,
     toolCallList,
     resumableSessions,
-    
+
     // Actions
     initStore,
     createSession,
@@ -961,7 +838,7 @@ export const useSessionStore = defineStore('session', () => {
     setModel,
     clearError,
     tryReconnect,
-    
+
     // Expose client for permission handling
     get acpClient() { return acpClient; },
   };

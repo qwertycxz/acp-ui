@@ -1,7 +1,6 @@
 // ACP Client Bridge - Adapts a generic AcpTransport to the ACP SDK's
-// Client interface. The bridge is transport-agnostic: it neither knows
-// nor cares whether the underlying byte stream is a local subprocess
-// (stdio), a WebSocket, or a Streamable HTTP connection.
+// Client interface. The bridge is transport-agnostic: it only depends on a
+// JSON message transport such as WebSocket or Streamable HTTP.
 import type {
   Client,
   SessionNotification,
@@ -26,7 +25,7 @@ import type {
 import { readTextFile as hostReadTextFile, writeTextFile as hostWriteTextFile } from './host';
 import type { AcpTransport, Unsubscribe } from './transport/types';
 import { createTransport } from './transport';
-import type { AgentConfig, AgentInstance, PermissionRequest as LocalPermissionRequest } from './types';
+import type { AgentConfig, PermissionRequest as LocalPermissionRequest } from './types';
 import { hasLocalFs } from './platform';
 import { ref, type Ref } from 'vue';
 import { useTrafficStore } from '../stores/traffic';
@@ -50,9 +49,8 @@ export class AcpClientBridge implements Client {
   private transport: AcpTransport;
   /**
    * Local filesystem RPCs (`fs/read_text_file`, `fs/write_text_file`) are
-   * handled by the Tauri fs plugin on desktop. On mobile and web builds the
-   * plugin is not available and these handlers respond with a method-not-found
-   * error so a misbehaving agent can't hang waiting for a response.
+   * unavailable in the browser build, so these handlers respond with a
+   * method-not-found error unless a caller explicitly overrides the capability.
    */
   private fsAvailable: boolean;
   private messageResolvers: Map<number, (response: unknown) => void> = new Map();
@@ -74,8 +72,6 @@ export class AcpClientBridge implements Client {
 
   constructor(transport: AcpTransport, options?: { fsAvailable?: boolean }) {
     this.transport = transport;
-    // Default: fs is available iff we are on Tauri desktop. Callers (e.g.
-    // remote agents that trust the host fs) can override.
     this.fsAvailable = options?.fsAvailable ?? hasLocalFs();
     this.unlistenMessage = this.transport.onMessage((msg) => this.handleMessage(msg));
     this.unlistenClose = this.transport.onClose((reason) => {
@@ -445,24 +441,11 @@ export class AcpClientBridge implements Client {
 /**
  * Factory: connect a transport for the given agent and wrap it in an
  * `AcpClientBridge`.
- *
- * For backward compatibility, the legacy single-argument form (passing an
- * `AgentInstance` for an already-spawned stdio process) is still accepted and
- * routes through a freshly attached `StdioTransport`. The stdio transport
- * is lazy-imported so it never lands in the web bundle.
  */
 export async function createAcpClient(
-  arg: AgentInstance | { name: string; config: AgentConfig },
+  arg: { name: string; config: AgentConfig },
   options?: { fsAvailable?: boolean }
 ): Promise<AcpClientBridge> {
-  if ('config' in arg) {
-    const transport = await createTransport(arg.name, arg.config);
-    return new AcpClientBridge(transport, options);
-  }
-  // Legacy path: caller already invoked spawnAgent and just wants us to wire
-  // up the events.
-  const { StdioTransport } = await import('./transport/stdio');
-  const transport = new StdioTransport(arg);
-  await transport.attach();
+  const transport = await createTransport(arg.name, arg.config);
   return new AcpClientBridge(transport, options);
 }

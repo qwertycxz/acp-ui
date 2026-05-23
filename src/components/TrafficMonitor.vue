@@ -49,10 +49,10 @@ onUnmounted(() => {
 
 function formatTime(timestamp: number): string {
   const date = new Date(timestamp);
-  return date.toLocaleTimeString('en-US', { 
-    hour12: false, 
-    hour: '2-digit', 
-    minute: '2-digit', 
+  return date.toLocaleTimeString('en-US', {
+    hour12: false,
+    hour: '2-digit',
+    minute: '2-digit',
     second: '2-digit',
   }) + '.' + String(date.getMilliseconds()).padStart(3, '0');
 }
@@ -117,17 +117,17 @@ function handleCopy(entry: TrafficEntry) {
 <template>
   <div class="traffic-monitor" :style="{ height: panelHeight + 'px' }">
     <!-- Resize Handle -->
-    <div 
-      class="resize-handle" 
+    <div
+      class="resize-handle"
       @mousedown="startResize"
       title="Drag to resize"
     ></div>
-    
+
     <div class="monitor-header">
       <span class="title">📡 ACP Traffic</span>
-      
+
       <div class="controls">
-        <button 
+        <button
           class="control-btn"
           :class="{ active: trafficStore.isPaused }"
           @click="trafficStore.togglePause()"
@@ -135,25 +135,25 @@ function handleCopy(entry: TrafficEntry) {
         >
           {{ trafficStore.isPaused ? '▶' : '⏸' }}
         </button>
-        
-        <button 
+
+        <button
           class="control-btn"
           @click="trafficStore.clear()"
           title="Clear"
         >
           🗑
         </button>
-        
+
         <div class="search-container">
           <span class="search-icon">🔍</span>
-          <input 
+          <input
             type="text"
             class="search-input"
             placeholder="Search..."
             :value="trafficStore.searchQuery"
             @input="trafficStore.setSearch(($event.target as HTMLInputElement).value)"
           />
-          <button 
+          <button
             v-if="trafficStore.searchQuery"
             class="search-clear-btn"
             @click="trafficStore.clearSearch()"
@@ -162,12 +162,12 @@ function handleCopy(entry: TrafficEntry) {
             ×
           </button>
         </div>
-        
+
         <span v-if="trafficStore.searchQuery" class="match-count">
           {{ trafficStore.filteredEntries.length }} match{{ trafficStore.filteredEntries.length === 1 ? '' : 'es' }}
         </span>
-        
-        <select 
+
+        <select
           class="filter-select"
           :value="trafficStore.filter"
           @change="trafficStore.setFilter(($event.target as HTMLSelectElement).value as any)"
@@ -178,21 +178,21 @@ function handleCopy(entry: TrafficEntry) {
           <option value="notifications">Notifications</option>
         </select>
       </div>
-      
+
       <button class="close-btn" @click="emit('close')" title="Close">×</button>
     </div>
-    
-    <div 
-      class="log-container" 
+
+    <div
+      class="log-container"
       ref="logContainer"
       @scroll="handleScroll"
     >
       <div v-if="trafficStore.filteredEntries.length === 0" class="empty-state">
         No traffic captured yet. Connect to an agent to see ACP messages.
       </div>
-      
-      <div 
-        v-for="entry in trafficStore.filteredEntries" 
+
+      <div
+        v-for="entry in trafficStore.filteredEntries"
         :key="entry.id"
         :class="getEntryClass(entry)"
       >
@@ -203,21 +203,21 @@ function handleCopy(entry: TrafficEntry) {
           <span class="method">{{ entry.method }}</span>
           <span class="type-label">{{ getTypeLabel(entry) }}</span>
           <span v-if="entry.requestId !== undefined" class="request-id">#{{ entry.requestId }}</span>
-          <button 
-            class="copy-btn" 
+          <button
+            class="copy-btn"
             @click.stop="handleCopy(entry)"
             title="Copy JSON"
           >
             📋
           </button>
         </div>
-        
+
         <div v-if="expandedIds.has(entry.id)" class="entry-payload">
           <pre>{{ formatJson(entry.payload) }}</pre>
         </div>
       </div>
     </div>
-    
+
     <div v-if="trafficStore.isPaused" class="paused-indicator">
       ⏸ Paused
     </div>
@@ -420,11 +420,11 @@ function handleCopy(entry: TrafficEntry) {
   .entry.out .direction-icon {
     color: #4da6ff;
   }
-  
+
   .entry.in .direction-icon {
     color: #5cb85c;
   }
-  
+
   .entry.error .direction-icon,
   .entry.error .method {
     color: #ff6b6b;

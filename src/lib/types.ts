@@ -3,25 +3,19 @@
 /**
  * Transport kinds supported by the frontend.
  *
- * - `stdio`: agent runs as a local subprocess (desktop only).
  * - `websocket`: agent listens on `ws://` / `wss://` and speaks ACP over a WebSocket.
  * - `http`: agent listens on `http://` / `https://` and speaks ACP over Streamable HTTP / SSE.
  */
-export type AgentTransportKind = 'stdio' | 'websocket' | 'http';
+export type AgentTransportKind = 'websocket' | 'http';
 
 export interface AgentConfig {
   /**
-   * Transport kind. Optional for backward compatibility — when omitted, the
-   * config is treated as a stdio agent.
+   * Transport kind. Optional for backward compatibility; when omitted, the
+   * config is treated as a WebSocket agent.
    */
   transport?: AgentTransportKind;
 
-  // ----- stdio fields (optional when transport != 'stdio') -----
-  command?: string;
-  args?: string[];
-  env?: Record<string, string>;
-
-  // ----- remote fields (used when transport != 'stdio') -----
+  // ----- remote fields -----
   url?: string;
   headers?: Record<string, string>;
 }
@@ -32,14 +26,7 @@ export interface AgentsConfig {
 
 /** Returns the effective transport kind for an agent config. */
 export function getTransportKind(config: AgentConfig): AgentTransportKind {
-  return config.transport ?? 'stdio';
-}
-
-/** Type guard: true for legacy / explicit stdio agents. */
-export function isStdioConfig(
-  config: AgentConfig
-): config is AgentConfig & { command: string } {
-  return getTransportKind(config) === 'stdio';
+  return config.transport ?? 'websocket';
 }
 
 /** Type guard: true for websocket / http agents with a non-empty URL. */

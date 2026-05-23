@@ -14,7 +14,7 @@ const emit = defineEmits<{
 
 const isOpen = ref(false);
 
-const currentModel = computed(() => 
+const currentModel = computed(() =>
   props.models.find(m => m.modelId === props.currentModelId)
 );
 
@@ -57,7 +57,7 @@ if (typeof window !== 'undefined') {
 
 <template>
   <div class="model-picker" :class="{ disabled }">
-    <button 
+    <button
       class="model-button"
       :disabled="disabled"
       @click.stop="toggleDropdown"
@@ -67,10 +67,10 @@ if (typeof window !== 'undefined') {
       <span class="model-name">{{ currentModel?.name || currentModelId }}</span>
       <span class="dropdown-arrow">{{ isOpen ? '▲' : '▼' }}</span>
     </button>
-    
+
     <Transition name="dropdown">
       <div v-if="isOpen" class="dropdown-menu" @click.stop>
-        <div 
+        <div
           v-for="model in models"
           :key="model.modelId"
           :class="['dropdown-item', { selected: model.modelId === currentModelId }]"
@@ -171,7 +171,7 @@ if (typeof window !== 'undefined') {
 @media (max-width: 800px) {
   .dropdown-menu {
     position: fixed;
-    top: calc(env(safe-area-inset-top, 0px) + 4rem);
+    top: calc(env(safe-area-inset-top, 0) + 4rem);
     left: 0.5rem;
     right: 0.5rem;
     bottom: auto;

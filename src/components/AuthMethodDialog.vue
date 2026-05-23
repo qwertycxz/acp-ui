@@ -23,13 +23,13 @@ function handleSelect(methodId: string) {
         <h3>Authentication Required</h3>
         <button class="close-btn" @click="emit('cancel')">✕</button>
       </div>
-      
+
       <div class="dialog-content">
         <p class="description">
           <strong>{{ agentName }}</strong> requires authentication to continue.
           Select an authentication method:
         </p>
-        
+
         <div class="auth-methods">
           <button
             v-for="method in authMethods"
@@ -47,7 +47,7 @@ function handleSelect(methodId: string) {
           </button>
         </div>
       </div>
-      
+
       <div class="dialog-footer">
         <button class="cancel-btn" @click="emit('cancel')">
           Cancel

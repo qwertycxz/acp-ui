@@ -11,7 +11,7 @@ const emit = defineEmits<{
 const sessionStore = useSessionStore();
 
 // Only show sessions that can be resumed (agent supports loadSession)
-const sessions = computed(() => 
+const sessions = computed(() =>
   [...sessionStore.resumableSessions].sort((a, b) => b.lastUpdated - a.lastUpdated)
 );
 
@@ -34,15 +34,15 @@ function handleDelete(sessionId: string, event: Event) {
 <template>
   <div class="session-list">
     <h3>Saved Sessions</h3>
-    
+
     <div v-if="sessions.length === 0" class="empty-state">
       <p>No saved sessions yet.</p>
       <p class="hint">Create a new session to get started.</p>
     </div>
-    
+
     <ul v-else>
-      <li 
-        v-for="session in sessions" 
+      <li
+        v-for="session in sessions"
         :key="session.id"
         class="session-item"
         @click="handleResume(session)"
@@ -52,7 +52,7 @@ function handleDelete(sessionId: string, event: Event) {
           <span class="session-agent">{{ session.agentName }}</span>
           <span class="session-date">{{ formatDate(session.lastUpdated) }}</span>
         </div>
-        <button 
+        <button
           class="delete-btn"
           @click="(e) => handleDelete(session.id, e)"
           title="Delete session"

@@ -26,7 +26,7 @@ export const useTrafficStore = defineStore('traffic', () => {
 
   const filteredEntries = computed(() => {
     let result = entries.value;
-    
+
     // Apply type filter
     switch (filter.value) {
       case 'requests':
@@ -39,30 +39,30 @@ export const useTrafficStore = defineStore('traffic', () => {
         result = result.filter(e => e.type === 'notification');
         break;
     }
-    
+
     // Apply search filter
     const query = searchQuery.value.trim().toLowerCase();
     if (query) {
-      result = result.filter(e => 
+      result = result.filter(e =>
         e.method.toLowerCase().includes(query) ||
         JSON.stringify(e.payload).toLowerCase().includes(query)
       );
     }
-    
+
     return result;
   });
 
   function addEntry(entry: Omit<TrafficEntry, 'id' | 'timestamp'>) {
     if (isPaused.value) return;
-    
+
     const newEntry: TrafficEntry = {
       ...entry,
       id: crypto.randomUUID(),
       timestamp: Date.now(),
     };
-    
+
     entries.value.push(newEntry);
-    
+
     // Limit entries to prevent memory issues
     if (entries.value.length > MAX_ENTRIES) {
       entries.value = entries.value.slice(-MAX_ENTRIES);

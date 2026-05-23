@@ -44,10 +44,10 @@ const kindIcon = computed(() => {
       <span class="tool-title">{{ toolCall.title }}</span>
       <span class="status-icon">{{ statusIcon }}</span>
     </div>
-    
+
     <div v-if="toolCall.locations?.length" class="tool-locations">
-      <div 
-        v-for="(loc, index) in toolCall.locations" 
+      <div
+        v-for="(loc, index) in toolCall.locations"
         :key="index"
         class="location"
       >
