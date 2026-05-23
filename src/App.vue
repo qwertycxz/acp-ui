@@ -3,7 +3,6 @@ import { ref, computed, onMounted, onBeforeUnmount } from 'vue';
 import { canPickFolder, pickFolder, loadKvStore, type KVStore } from './lib/host';
 import { useConfigStore } from './stores/config';
 import { useSessionStore } from './stores/session';
-import { initTelemetry } from './lib/telemetry';
 import AgentSelector from './components/AgentSelector.vue';
 import SessionList from './components/SessionList.vue';
 import ChatView from './components/ChatView.vue';
@@ -110,10 +109,6 @@ onMounted(async () => {
 
   // Load persisted preferences first
   prefsStore = await loadKvStore('preferences.json');
-
-  // Initialize telemetry (check user preference)
-  const telemetryEnabled = await prefsStore.get<boolean>('telemetryEnabled') ?? true;
-  await initTelemetry(telemetryEnabled);
 
   // Initialize stores
   await configStore.loadConfig();

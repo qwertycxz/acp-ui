@@ -3,7 +3,6 @@ import { defineStore } from 'pinia';
 import { ref, computed, watch } from 'vue';
 import { loadKvStore, type KVStore } from '../lib/host/storage';
 import { getAppVersion } from '../lib/host';
-import { trackEvent, trackError } from '../lib/telemetry';
 import type { SavedSession, ChatMessage, ToolCallInfo, PermissionRequest, SessionMode, SlashCommand, ModelInfo, AgentConfig } from '../lib/types';
 import { AcpClientBridge, createAcpClient } from '../lib/acp-bridge';
 import { hasLocalFs } from '../lib/platform';
@@ -400,8 +399,6 @@ export const useSessionStore = defineStore('session', () => {
       messages.value = [];
       toolCalls.value.clear();
 
-      trackEvent('SessionCreated', { agentName, success: 'true' });
-
       if (sessionResponse.modes) {
         availableModes.value = (sessionResponse.modes.availableModes || []).map(m => ({
           id: m.id,
@@ -435,8 +432,6 @@ export const useSessionStore = defineStore('session', () => {
         }
       }
       acpClient = null;
-      trackEvent('SessionCreated', { agentName, success: 'false' });
-      trackError(e instanceof Error ? e : new Error(String(e)));
       throw e;
     } finally {
       isLoading.value = false;
@@ -551,9 +546,6 @@ export const useSessionStore = defineStore('session', () => {
       isConnected.value = true;
       // Messages already populated by session/update notifications during loadSession
 
-      // Track successful session resume
-      trackEvent('SessionResumed', { agentName: savedSession.agentName, success: 'true' });
-
       // Update last accessed time
       savedSession.lastUpdated = Date.now();
       await saveSessionsToStore();
@@ -568,9 +560,6 @@ export const useSessionStore = defineStore('session', () => {
         }
         acpClient = null;
       }
-      // Track session resume failure
-      trackEvent('SessionResumed', { agentName: savedSession.agentName, success: 'false' });
-      trackError(e instanceof Error ? e : new Error(String(e)));
       throw e;
     } finally {
       isLoading.value = false;
@@ -604,12 +593,6 @@ export const useSessionStore = defineStore('session', () => {
       });
 
       console.log('Prompt completed:', response.stopReason);
-
-      // Track prompt sent
-      trackEvent('PromptSent', {
-        messageLength: String(text.length),
-        stopReason: response.stopReason || 'unknown',
-      });
 
       // Update session title if it's the first message
       if (messages.value.length === 2 && currentSession.value) {
@@ -673,21 +656,10 @@ export const useSessionStore = defineStore('session', () => {
 
   // Disconnect current session
   async function disconnect(): Promise<void> {
-    const agentName = currentSession.value?.agentName || 'unknown';
-    const sessionStart = currentSession.value?.lastUpdated || Date.now();
-    const sessionDuration = Math.round((Date.now() - sessionStart) / 1000);
-
     if (acpClient) {
       await acpClient.disconnect();
       acpClient = null;
     }
-
-    // Track session disconnect
-    trackEvent('SessionDisconnected', {
-      agentName,
-      sessionDurationSeconds: String(sessionDuration),
-      messageCount: String(messages.value.length),
-    });
 
     currentSession.value = null;
     isConnected.value = false;
