@@ -2,7 +2,6 @@
 import { ref, computed } from 'vue';
 import { useConfigStore } from '../stores/config';
 import { addAgent, removeAgent, updateAgent } from '../lib/host';
-import EnvVarEditor from './EnvVarEditor.vue';
 
 const emit = defineEmits<{
   (e: 'close'): void;
@@ -13,14 +12,12 @@ const configStore = useConfigStore();
 interface AgentRow {
   name: string;
   url: string;
-  headers: Record<string, string>;
 }
 
 const agents = computed<AgentRow[]>(() =>
   Object.entries(configStore.config.agents).map(([name, config]) => ({
     name,
     url: config.url ?? '',
-    headers: config.headers ?? {},
   }))
 );
 
@@ -29,14 +26,12 @@ const showAddForm = ref(false);
 const editingAgent = ref<string | null>(null);
 const formName = ref('');
 const formUrl = ref('');
-const formHeaders = ref<Record<string, string>>({});
 const formError = ref('');
 const isSubmitting = ref(false);
 
 function resetForm() {
   formName.value = '';
   formUrl.value = '';
-  formHeaders.value = {};
   formError.value = '';
   showAddForm.value = false;
   editingAgent.value = null;
@@ -52,7 +47,6 @@ function startEdit(agent: AgentRow) {
   editingAgent.value = agent.name;
   formName.value = agent.name;
   formUrl.value = agent.url;
-  formHeaders.value = { ...agent.headers };
 }
 
 async function handleSubmit() {
@@ -85,7 +79,6 @@ async function handleSubmit() {
       configStore.updateFromEvent(
         await updateAgent(formName.value, {
           url: formUrl.value.trim(),
-          headers: Object.keys(formHeaders.value).length > 0 ? formHeaders.value : undefined,
         })
       );
     } else {
@@ -98,7 +91,6 @@ async function handleSubmit() {
       configStore.updateFromEvent(
         await addAgent(formName.value, {
           url: formUrl.value.trim(),
-          headers: Object.keys(formHeaders.value).length > 0 ? formHeaders.value : undefined,
         })
       );
     }
@@ -161,16 +153,6 @@ async function handleDelete(name: string) {
               />
               <small>
                 WebSocket endpoint (ws:// or wss://)
-              </small>
-            </div>
-
-            <div class="form-group">
-              <label>Headers</label>
-              <EnvVarEditor v-model="formHeaders" />
-              <small>
-                Authorization headers are sent over the connection. Browser WebSocket APIs
-                cannot attach arbitrary HTTP headers; an <code>Authorization: Bearer &lt;token&gt;</code>
-                header is forwarded as a <code>bearer.&lt;token&gt;</code> WebSocket subprotocol.
               </small>
             </div>
 

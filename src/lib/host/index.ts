@@ -6,7 +6,6 @@ import type { AgentsConfig } from '../types';
 /** Optional fields used when adding/updating a WebSocket agent. */
 export interface RemoteAgentOptions {
   url?: string;
-  headers?: Record<string, string>;
 }
 
 const WEB_CONFIG_KEY = 'acp-ui:agents';
@@ -55,7 +54,6 @@ export async function addAgent(
   config.agents[name] = {
     transport: 'websocket',
     url,
-    headers: remote.headers && Object.keys(remote.headers).length > 0 ? remote.headers : undefined,
   };
   saveWebConfig(config);
   return config;
@@ -74,7 +72,6 @@ export async function updateAgent(
   config.agents[name] = {
     transport: 'websocket',
     url,
-    headers: remote.headers && Object.keys(remote.headers).length > 0 ? remote.headers : undefined,
   };
   saveWebConfig(config);
   return config;

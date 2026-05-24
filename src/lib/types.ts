@@ -3,7 +3,6 @@
 export interface AgentConfig {
   transport?: 'websocket';
   url?: string;
-  headers?: Record<string, string>;
 }
 
 export interface AgentsConfig {

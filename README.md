@@ -33,14 +33,11 @@ Example remote agent:
   "agents": {
     "Copilot CLI (remote)": {
       "transport": "websocket",
-      "url": "wss://acp.example.com/v1",
-      "headers": { "Authorization": "Bearer YOUR_TOKEN" }
+      "url": "wss://acp.example.com/v1"
     }
   }
 }
 ```
-
-Browser WebSocket APIs cannot set arbitrary HTTP headers. An `Authorization: Bearer <token>` header is forwarded as a `bearer.<token>` WebSocket subprotocol.
 
 Filesystem RPCs (`fs/read_text_file`, `fs/write_text_file`) are not available in the browser app. The client advertises those capabilities as `false`, and any incoming `fs/*` request is rejected with JSON-RPC `-32601 Method not found`. For remote agents, the working directory path is interpreted on the agent host.
 

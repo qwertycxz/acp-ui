@@ -736,16 +736,7 @@ export async function createAcpClient(
     throw new Error(`Agent '${arg.name}' is missing 'url' for websocket transport`);
   }
 
-  const protocols = ['acp.v1'];
-  const auth = arg.config.headers
-    ? Object.entries(arg.config.headers).find(([key]) => key.toLowerCase() === 'authorization')?.[1]
-    : undefined;
-  const match = auth ? /^Bearer\s+(.+)$/i.exec(auth.trim()) : null;
-  if (match) {
-    protocols.push(`bearer.${match[1].replace(/\s+/g, '')}`);
-  }
-
-  const socket = new WebSocket(arg.config.url, protocols);
+  const socket = new WebSocket(arg.config.url);
 
   await new Promise<void>((resolve, reject) => {
     let settled = false;
