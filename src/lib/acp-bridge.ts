@@ -43,7 +43,6 @@ function getTrafficStore() {
 }
 
 const JSONRPC_METHOD_NOT_FOUND = -32601;
-const CONNECT_TIMEOUT_MS = 15_000;
 const PROTOCOL_VERSION = 1;
 
 interface SessionStartResult {
@@ -392,15 +391,6 @@ export class AcpClientBridge implements Client {
         this.pendingMethods.delete(id);
         reject(e);
       }
-
-      setTimeout(() => {
-        if (this.messageResolvers.has(id)) {
-          this.messageResolvers.delete(id);
-          this.messageRejecters.delete(id);
-          this.pendingMethods.delete(id);
-          reject(new Error(`Request timeout: ${method}`));
-        }
-      }, 60000);
     });
   }
 
@@ -737,39 +727,32 @@ export async function createAcpClient(
   }
 
   const socket = new WebSocket(arg.config.url);
-
   await new Promise<void>((resolve, reject) => {
-    let settled = false;
-    const settle = (fn: () => void) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      fn();
-    };
-
-    const timer = setTimeout(() => {
-      settle(() => {
-        try {
-          socket.close();
-        } catch {
-          /* ignore */
-        }
-        reject(new Error(`WebSocket connect timed out after ${CONNECT_TIMEOUT_MS}ms`));
-      });
-    }, CONNECT_TIMEOUT_MS);
-
-    socket.addEventListener('open', () => settle(resolve));
-    socket.addEventListener('error', () => settle(() => reject(new Error('WebSocket connect failed'))));
-    socket.addEventListener('close', (event) => {
-      settle(() =>
-        reject(
-          new Error(
-            `WebSocket closed before open (code=${event.code}, reason=${event.reason || 'unknown'})`
-          )
+    function cleanup() {
+      socket.removeEventListener('open', handleOpen);
+      socket.removeEventListener('error', handleError);
+      socket.removeEventListener('close', handleClose);
+    }
+    function handleOpen() {
+      cleanup();
+      resolve();
+    }
+    function handleError() {
+      cleanup();
+      reject(new Error('WebSocket connect failed'));
+    }
+    function handleClose(event: CloseEvent) {
+      cleanup();
+      reject(
+        new Error(
+          `WebSocket closed before open (code=${event.code}, reason=${event.reason || 'unknown'})`
         )
       );
-    });
-  });
+    }
 
+    socket.addEventListener('open', handleOpen);
+    socket.addEventListener('error', handleError);
+    socket.addEventListener('close', handleClose);
+  });
   return new AcpClientBridge(socket);
 }
