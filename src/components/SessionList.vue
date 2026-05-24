@@ -1,18 +1,19 @@
 <script setup lang="ts">
 import { computed } from 'vue';
-import { useSessionStore } from '../stores/session';
 import type { SavedSession } from '../lib/types';
+
+const props = defineProps<{
+  sessions: SavedSession[];
+}>();
 
 const emit = defineEmits<{
   resume: [session: SavedSession];
   delete: [sessionId: string];
 }>();
 
-const sessionStore = useSessionStore();
-
 // Only show sessions that can be resumed (agent supports loadSession)
 const sessions = computed(() =>
-  [...sessionStore.resumableSessions].sort((a, b) => b.lastUpdated - a.lastUpdated)
+  [...props.sessions].sort((a, b) => b.lastUpdated - a.lastUpdated)
 );
 
 function formatDate(timestamp: number): string {

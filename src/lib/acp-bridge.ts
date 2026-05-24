@@ -16,12 +16,23 @@ import type {
   CancelNotification,
   AuthenticateRequest,
   AuthenticateResponse,
+  AuthMethod,
 } from '@agentclientprotocol/sdk';
-import type { AgentConfig, PermissionRequest as LocalPermissionRequest } from './types';
+import type {
+  AgentConfig,
+  ChatMessage,
+  ModelInfo,
+  PermissionRequest as LocalPermissionRequest,
+  SavedSession,
+  SessionMode,
+  SlashCommand,
+  ToolCallInfo,
+} from './types';
 import { ref, type Ref } from 'vue';
 import { useTrafficStore } from '../stores/traffic';
 
 type PermissionResolver = (response: RequestPermissionResponse) => void;
+type AuthMethodResolver = (methodId: string | null) => void;
 
 let trafficStore: ReturnType<typeof useTrafficStore> | null = null;
 function getTrafficStore() {
@@ -33,6 +44,12 @@ function getTrafficStore() {
 
 const JSONRPC_METHOD_NOT_FOUND = -32601;
 const CONNECT_TIMEOUT_MS = 15_000;
+const PROTOCOL_VERSION = 1;
+
+interface SessionStartResult {
+  sessionId: string;
+  supportsLoadSession: boolean;
+}
 
 export class AcpClientBridge implements Client {
   private socket: WebSocket;
@@ -44,8 +61,18 @@ export class AcpClientBridge implements Client {
 
   public pendingPermissionRequest: Ref<LocalPermissionRequest | null> = ref(null);
   private permissionResolver: PermissionResolver | null = null;
+  public pendingAuthMethods: Ref<AuthMethod[]> = ref([]);
+  public pendingAuthAgentName = ref('');
+  private authMethodResolver: AuthMethodResolver | null = null;
 
-  public onSessionUpdate: ((notification: SessionNotification) => void) | null = null;
+  public messages: Ref<ChatMessage[]> = ref([]);
+  public toolCalls: Ref<Map<string, ToolCallInfo>> = ref(new Map());
+  public availableModes: Ref<SessionMode[]> = ref([]);
+  public currentModeId = ref('');
+  public availableCommands: Ref<SlashCommand[]> = ref([]);
+  public availableModels: Ref<ModelInfo[]> = ref([]);
+  public currentModelId = ref('');
+
   public onTransportClose: ((reason?: string) => void) | null = null;
 
   constructor(socket: WebSocket) {
@@ -210,8 +237,124 @@ export class AcpClientBridge implements Client {
   }
 
   private handleNotification(method: string, params: unknown): void {
-    if (method === 'session/update' && this.onSessionUpdate) {
-      this.onSessionUpdate(params as SessionNotification);
+    if (method === 'session/update') {
+      this.handleSessionUpdate(params as SessionNotification);
+    }
+  }
+
+  private handleSessionUpdate(notification: SessionNotification): void {
+    const update = notification.update;
+
+    switch (update.sessionUpdate) {
+      case 'user_message_chunk': {
+        const lastUserMsg = this.messages.value[this.messages.value.length - 1];
+        if (lastUserMsg && lastUserMsg.role === 'user') {
+          if (update.content.type === 'text') {
+            lastUserMsg.content += update.content.text;
+          }
+        } else {
+          this.messages.value.push({
+            id: crypto.randomUUID(),
+            role: 'user',
+            content: update.content.type === 'text' ? update.content.text : '',
+            timestamp: Date.now(),
+          });
+        }
+        break;
+      }
+
+      case 'agent_message_chunk': {
+        const lastMsg = this.messages.value[this.messages.value.length - 1];
+        if (lastMsg && lastMsg.role === 'assistant') {
+          if (update.content.type === 'text') {
+            lastMsg.content += update.content.text;
+          }
+        } else {
+          this.messages.value.push({
+            id: crypto.randomUUID(),
+            role: 'assistant',
+            content: update.content.type === 'text' ? update.content.text : '',
+            timestamp: Date.now(),
+            toolCalls: [],
+          });
+        }
+        break;
+      }
+
+      case 'agent_thought_chunk': {
+        const lastAssistantMsg = this.messages.value[this.messages.value.length - 1];
+        if (lastAssistantMsg && lastAssistantMsg.role === 'assistant') {
+          if (update.content.type === 'text') {
+            lastAssistantMsg.thought = (lastAssistantMsg.thought || '') + update.content.text;
+          }
+        } else {
+          this.messages.value.push({
+            id: crypto.randomUUID(),
+            role: 'assistant',
+            content: '',
+            thought: update.content.type === 'text' ? update.content.text : '',
+            timestamp: Date.now(),
+            toolCalls: [],
+          });
+        }
+        break;
+      }
+
+      case 'tool_call': {
+        const currentAssistantMsg = this.messages.value[this.messages.value.length - 1];
+        const toolCall = {
+          toolCallId: update.toolCallId,
+          title: update.title,
+          kind: update.kind || 'other',
+          status: update.status || 'pending',
+          locations: update.locations,
+        };
+        if (currentAssistantMsg && currentAssistantMsg.role === 'assistant') {
+          if (!currentAssistantMsg.toolCalls) {
+            currentAssistantMsg.toolCalls = [];
+          }
+          currentAssistantMsg.toolCalls.push(toolCall);
+        }
+        this.toolCalls.value.set(update.toolCallId, toolCall);
+        break;
+      }
+
+      case 'tool_call_update': {
+        const existing = this.toolCalls.value.get(update.toolCallId);
+        if (existing) {
+          if (update.status) existing.status = update.status;
+          if (update.title) existing.title = update.title;
+          for (const msg of this.messages.value) {
+            if (msg.toolCalls) {
+              const tc = msg.toolCalls.find(t => t.toolCallId === update.toolCallId);
+              if (tc) {
+                if (update.status) tc.status = update.status;
+                if (update.title) tc.title = update.title;
+              }
+            }
+          }
+        }
+        break;
+      }
+
+      case 'current_mode_update':
+        if ('modeId' in update && update.modeId) {
+          this.currentModeId.value = update.modeId as string;
+        }
+        break;
+
+      case 'available_commands_update':
+        if ('availableCommands' in update && Array.isArray(update.availableCommands)) {
+          this.availableCommands.value = update.availableCommands.map((cmd) => ({
+            name: cmd.name,
+            description: cmd.description,
+            hint: cmd.input?.hint ?? undefined,
+          }));
+        }
+        break;
+
+      default:
+        console.log('Unhandled session update:', update);
     }
   }
 
@@ -320,6 +463,204 @@ export class AcpClientBridge implements Client {
     return this.sendRequest<AuthenticateResponse>('authenticate', params);
   }
 
+  private async initializeForSession(appVersion: string): Promise<InitializeResponse> {
+    return this.initialize({
+      protocolVersion: PROTOCOL_VERSION,
+      clientCapabilities: {
+        fs: {
+          readTextFile: false,
+          writeTextFile: false,
+        },
+      },
+      clientInfo: {
+        name: 'acp-ui',
+        title: 'ACP UI',
+        version: appVersion,
+      },
+    });
+  }
+
+  private resetSessionData(): void {
+    this.messages.value = [];
+    this.toolCalls.value.clear();
+    this.availableModes.value = [];
+    this.currentModeId.value = '';
+    this.availableCommands.value = [];
+    this.availableModels.value = [];
+    this.currentModelId.value = '';
+  }
+
+  private applyNewSessionMetadata(sessionResponse: NewSessionResponse): void {
+    if (sessionResponse.modes) {
+      this.availableModes.value = (sessionResponse.modes.availableModes || []).map(m => ({
+        id: m.id,
+        name: m.name,
+        description: m.description ?? undefined,
+      }));
+      this.currentModeId.value = sessionResponse.modes.currentModeId || '';
+    } else {
+      this.availableModes.value = [];
+      this.currentModeId.value = '';
+    }
+
+    if (sessionResponse.models) {
+      this.availableModels.value = (sessionResponse.models.availableModels || []).map(m => ({
+        modelId: m.modelId,
+        name: m.name,
+        description: m.description ?? undefined,
+      }));
+      this.currentModelId.value = sessionResponse.models.currentModelId || '';
+    } else {
+      this.availableModels.value = [];
+      this.currentModelId.value = '';
+    }
+  }
+
+  private assertNotAborted(shouldAbort?: () => boolean): void {
+    if (shouldAbort?.()) {
+      throw new Error('Connection cancelled');
+    }
+  }
+
+  private isAuthenticationRequired(error: unknown): boolean {
+    const message = error instanceof Error ? error.message : String(error);
+    return message.toLowerCase().includes('authentication required') || message.includes('-32000');
+  }
+
+  private async promptForAuthMethod(
+    authMethods: AuthMethod[],
+    agentName: string
+  ): Promise<string | null> {
+    return new Promise((resolve) => {
+      this.pendingAuthMethods.value = authMethods;
+      this.pendingAuthAgentName.value = agentName;
+      this.authMethodResolver = resolve;
+    });
+  }
+
+  private clearAuthPrompt(): void {
+    this.authMethodResolver = null;
+    this.pendingAuthMethods.value = [];
+    this.pendingAuthAgentName.value = '';
+  }
+
+  async retryWithAuth<T>(
+    error: unknown,
+    authMethods: AuthMethod[],
+    agentName: string,
+    retry: () => Promise<T>,
+    shouldAbort?: () => boolean
+  ): Promise<T> {
+    if (!this.isAuthenticationRequired(error) || authMethods.length === 0) {
+      throw error;
+    }
+
+    const selectedMethodId = await this.promptForAuthMethod(authMethods, agentName);
+    this.assertNotAborted(shouldAbort);
+    if (!selectedMethodId) {
+      await this.disconnect();
+      throw new Error('Authentication cancelled by user');
+    }
+
+    await this.authenticate({ methodId: selectedMethodId });
+    this.assertNotAborted(shouldAbort);
+    return retry();
+  }
+
+  async startNewSession(
+    agentName: string,
+    cwd: string,
+    appVersion: string,
+    shouldAbort?: () => boolean
+  ): Promise<SessionStartResult> {
+    this.assertNotAborted(shouldAbort);
+    this.resetSessionData();
+    const initResponse = await this.initializeForSession(appVersion);
+    const authMethods = initResponse.authMethods || [];
+    const supportsLoadSession = initResponse.agentCapabilities?.loadSession ?? false;
+    this.assertNotAborted(shouldAbort);
+
+    const sessionResponse = await this.newSession({ cwd, mcpServers: [] }).catch((error: unknown) =>
+      this.retryWithAuth(
+        error,
+        authMethods,
+        agentName,
+        () => this.newSession({ cwd, mcpServers: [] }),
+        shouldAbort
+      )
+    );
+    this.assertNotAborted(shouldAbort);
+    this.applyNewSessionMetadata(sessionResponse);
+    return {
+      sessionId: sessionResponse.sessionId,
+      supportsLoadSession,
+    };
+  }
+
+  async loadSavedSession(
+    savedSession: SavedSession,
+    appVersion: string,
+    shouldAbort?: () => boolean
+  ): Promise<void> {
+    this.assertNotAborted(shouldAbort);
+    const initResponse = await this.initializeForSession(appVersion);
+    const authMethods = initResponse.authMethods || [];
+    this.resetSessionData();
+    this.assertNotAborted(shouldAbort);
+
+    await this.loadSession({
+      sessionId: savedSession.sessionId,
+      cwd: savedSession.cwd,
+      mcpServers: [],
+    }).catch((error: unknown) =>
+      this.retryWithAuth(
+        error,
+        authMethods,
+        savedSession.agentName,
+        () =>
+          this.loadSession({
+            sessionId: savedSession.sessionId,
+            cwd: savedSession.cwd,
+            mcpServers: [],
+          }),
+        shouldAbort
+      )
+    );
+  }
+
+  async sendPromptText(sessionId: string, text: string): Promise<PromptResponse> {
+    this.messages.value.push({
+      id: crypto.randomUUID(),
+      role: 'user',
+      content: text,
+      timestamp: Date.now(),
+    });
+
+    return this.prompt({
+      sessionId,
+      prompt: [
+        {
+          type: 'text',
+          text,
+        },
+      ],
+    });
+  }
+
+  async cancelSession(sessionId: string): Promise<void> {
+    await this.cancel({ sessionId });
+  }
+
+  async setSessionMode(sessionId: string, modeId: string): Promise<void> {
+    await this.setMode({ sessionId, modeId });
+    this.currentModeId.value = modeId;
+  }
+
+  async setSessionModel(sessionId: string, modelId: string): Promise<void> {
+    await this.unstable_setSessionModel({ sessionId, modelId });
+    this.currentModelId.value = modelId;
+  }
+
   async requestPermission(
     params: RequestPermissionRequest
   ): Promise<RequestPermissionResponse> {
@@ -368,6 +709,20 @@ export class AcpClientBridge implements Client {
     }
   }
 
+  selectAuthMethod(methodId: string): void {
+    if (this.authMethodResolver) {
+      this.authMethodResolver(methodId);
+      this.clearAuthPrompt();
+    }
+  }
+
+  cancelAuthSelection(): void {
+    if (this.authMethodResolver) {
+      this.authMethodResolver(null);
+      this.clearAuthPrompt();
+    }
+  }
+
   async sessionUpdate(_params: SessionNotification): Promise<void> {
     // This is called by the agent; inbound notifications are handled above.
   }
@@ -381,7 +736,16 @@ export async function createAcpClient(
     throw new Error(`Agent '${arg.name}' is missing 'url' for websocket transport`);
   }
 
-  const socket = new WebSocket(arg.config.url);
+  const protocols = ['acp.v1'];
+  const auth = arg.config.headers
+    ? Object.entries(arg.config.headers).find(([key]) => key.toLowerCase() === 'authorization')?.[1]
+    : undefined;
+  const match = auth ? /^Bearer\s+(.+)$/i.exec(auth.trim()) : null;
+  if (match) {
+    protocols.push(`bearer.${match[1].replace(/\s+/g, '')}`);
+  }
+
+  const socket = new WebSocket(arg.config.url, protocols);
 
   await new Promise<void>((resolve, reject) => {
     let settled = false;

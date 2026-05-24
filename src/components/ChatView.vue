@@ -1,13 +1,30 @@
 <script setup lang="ts">
 import { ref, computed, nextTick, watch } from 'vue';
 import { marked } from 'marked';
-import { useSessionStore } from '../stores/session';
 import ModePicker from './ModePicker.vue';
 import ModelPicker from './ModelPicker.vue';
 import CommandPalette from './CommandPalette.vue';
-import type { SlashCommand } from '../lib/types';
+import type { ChatMessage, ModelInfo, SavedSession, SessionMode, SlashCommand } from '../lib/types';
 
-const sessionStore = useSessionStore();
+const props = defineProps<{
+  messages: ChatMessage[];
+  isLoading: boolean;
+  isReconnecting: boolean;
+  currentSession: SavedSession | null;
+  availableModes: SessionMode[];
+  currentModeId: string;
+  availableModels: ModelInfo[];
+  currentModelId: string;
+  availableCommands: SlashCommand[];
+}>();
+
+const emit = defineEmits<{
+  send: [text: string];
+  cancel: [];
+  modeChange: [modeId: string];
+  modelChange: [modelId: string];
+}>();
+
 const inputText = ref('');
 const messagesContainer = ref<HTMLElement | null>(null);
 const commandPaletteRef = ref<InstanceType<typeof CommandPalette> | null>(null);
@@ -26,19 +43,9 @@ const submitOnEnter =
 // Track expanded thought sections by message id
 const expandedThoughts = ref<Set<string>>(new Set());
 
-const messages = computed(() => sessionStore.messageList);
-const isLoading = computed(() => sessionStore.isLoading);
-const isReconnecting = computed(() => sessionStore.isReconnecting);
-const currentSession = computed(() => sessionStore.currentSession);
-const availableModes = computed(() => sessionStore.availableModes);
-const currentModeId = computed(() => sessionStore.currentModeId);
-const availableModels = computed(() => sessionStore.availableModels);
-const currentModelId = computed(() => sessionStore.currentModelId);
-const availableCommands = computed(() => sessionStore.availableCommands);
-
 // Slash command state
 const showCommandPalette = computed(() => {
-  if (availableCommands.value.length === 0) return false;
+  if (props.availableCommands.length === 0) return false;
   const text = inputText.value;
   // Show palette when input starts with "/" and cursor is after it
   if (!text.startsWith('/')) return false;
@@ -53,7 +60,7 @@ const commandFilter = computed(() => {
 });
 
 // Auto-scroll to bottom when new messages arrive
-watch(messages, async () => {
+watch(() => props.messages, async () => {
   await nextTick();
   if (messagesContainer.value) {
     messagesContainer.value.scrollTop = messagesContainer.value.scrollHeight;
@@ -62,14 +69,10 @@ watch(messages, async () => {
 
 async function handleSend() {
   const text = inputText.value.trim();
-  if (!text || isLoading.value) return;
+  if (!text || props.isLoading) return;
 
   inputText.value = '';
-  try {
-    await sessionStore.sendPrompt(text);
-  } catch (e) {
-    console.error('Failed to send prompt:', e);
-  }
+  emit('send', text);
 }
 
 function handleKeyDown(event: KeyboardEvent) {
@@ -104,23 +107,15 @@ function handleCommandClose() {
 }
 
 function handleCancel() {
-  sessionStore.cancelOperation();
+  emit('cancel');
 }
 
 async function handleModeChange(modeId: string) {
-  try {
-    await sessionStore.setMode(modeId);
-  } catch (e) {
-    console.error('Failed to change mode:', e);
-  }
+  emit('modeChange', modeId);
 }
 
 async function handleModelChange(modelId: string) {
-  try {
-    await sessionStore.setModel(modelId);
-  } catch (e) {
-    console.error('Failed to change model:', e);
-  }
+  emit('modelChange', modelId);
 }
 
 function isThoughtExpanded(messageId: string): boolean {
@@ -167,29 +162,29 @@ function getStatusIcon(status: string): string {
 <template>
   <div class="chat-view">
     <div class="chat-header">
-      <h2>{{ currentSession?.title || 'Chat' }}</h2>
+      <h2>{{ props.currentSession?.title || 'Chat' }}</h2>
       <div class="header-right">
         <ModelPicker
-          v-if="availableModels.length > 0"
-          :models="availableModels"
-          :current-model-id="currentModelId"
-          :disabled="isLoading"
+          v-if="props.availableModels.length > 0"
+          :models="props.availableModels"
+          :current-model-id="props.currentModelId"
+          :disabled="props.isLoading"
           @change="handleModelChange"
         />
         <ModePicker
-          v-if="availableModes.length > 0"
-          :modes="availableModes"
-          :current-mode-id="currentModeId"
-          :disabled="isLoading"
+          v-if="props.availableModes.length > 0"
+          :modes="props.availableModes"
+          :current-mode-id="props.currentModeId"
+          :disabled="props.isLoading"
           @change="handleModeChange"
         />
-        <span class="agent-name">{{ currentSession?.agentName }}</span>
+        <span class="agent-name">{{ props.currentSession?.agentName }}</span>
       </div>
     </div>
 
     <div ref="messagesContainer" class="messages-container">
       <div
-        v-for="message in messages"
+        v-for="message in props.messages"
         :key="message.id"
         :class="['message', `message-${message.role}`]"
       >
@@ -235,7 +230,7 @@ function getStatusIcon(status: string): string {
       </div>
 
       <!-- Loading indicator -->
-      <div v-if="isLoading" class="loading-indicator">
+      <div v-if="props.isLoading" class="loading-indicator">
         <span class="spinner"></span>
         <span>Thinking...</span>
         <button class="cancel-btn" @click="handleCancel">Cancel</button>
@@ -245,7 +240,7 @@ function getStatusIcon(status: string): string {
     <div class="input-container">
       <CommandPalette
         ref="commandPaletteRef"
-        :commands="availableCommands"
+        :commands="props.availableCommands"
         :filter="commandFilter"
         :visible="showCommandPalette"
         @select="handleCommandSelect"
@@ -254,19 +249,19 @@ function getStatusIcon(status: string): string {
       <textarea
         v-model="inputText"
         :placeholder="
-          isReconnecting
+          props.isReconnecting
             ? 'Reconnecting…'
-            : (availableCommands.length > 0
+            : (props.availableCommands.length > 0
                 ? 'Type your message... (/ for commands)'
                 : 'Type your message...')
         "
-        :disabled="isLoading || isReconnecting"
+        :disabled="props.isLoading || props.isReconnecting"
         @keydown="handleKeyDown"
         rows="3"
       />
       <button
         class="send-btn"
-        :disabled="!inputText.trim() || isLoading || isReconnecting"
+        :disabled="!inputText.trim() || props.isLoading || props.isReconnecting"
         @click="handleSend"
       >
         Send

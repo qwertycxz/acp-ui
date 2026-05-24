@@ -1,8 +1,8 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, onBeforeUnmount } from 'vue';
+import { ref, computed, shallowRef, onMounted, onBeforeUnmount } from 'vue';
 import { loadKvStore, type KVStore } from './lib/host';
 import { useConfigStore } from './stores/config';
-import { useSessionStore } from './stores/session';
+import { AcpClientBridge, createAcpClient } from './lib/acp-bridge';
 import AgentSelector from './components/AgentSelector.vue';
 import SessionList from './components/SessionList.vue';
 import ChatView from './components/ChatView.vue';
@@ -11,10 +11,12 @@ import SettingsView from './components/SettingsView.vue';
 import AuthMethodDialog from './components/AuthMethodDialog.vue';
 import TrafficMonitor from './components/TrafficMonitor.vue';
 import StartupProgress from './components/StartupProgress.vue';
-import type { SavedSession } from './lib/types';
+import type { AuthMethod } from '@agentclientprotocol/sdk';
+import type { ChatMessage, ModelInfo, PermissionRequest, SavedSession, SessionMode, SlashCommand } from './lib/types';
 
 const configStore = useConfigStore();
-const sessionStore = useSessionStore();
+const appVersion =
+  (import.meta.env as Record<string, string | undefined>).VITE_APP_VERSION ?? '0.0.0-web';
 
 const selectedAgent = ref('');
 const selectedCwd = ref('');
@@ -22,6 +24,19 @@ const showSidebar = ref(true);
 const showSettings = ref(false);
 const showTrafficMonitor = ref(false);
 const showStartupDetails = ref(false);
+const savedSessions = ref<SavedSession[]>([]);
+const currentSession = ref<SavedSession | null>(null);
+const isConnected = ref(false);
+const isLoading = ref(false);
+const isConnecting = ref(false);
+const isReconnecting = ref(false);
+const sessionError = ref<string | null>(null);
+const startupPhase = ref('starting');
+const startupLogs = ref<string[]>([]);
+const startupElapsed = ref(0);
+const acpClient = shallowRef<AcpClientBridge | null>(null);
+let connectionAborted = false;
+let startupTimer: ReturnType<typeof setInterval> | null = null;
 
 // Reactive flag tracking whether the viewport is narrow enough to show the
 // sidebar as a slide-in drawer (mobile / very narrow desktop windows). Used
@@ -44,7 +59,7 @@ function scheduleReconnect() {
     // Skip if the browser still thinks we're offline; we'll be re-triggered
     // by the `online` event when connectivity returns.
     if (typeof navigator !== 'undefined' && navigator.onLine === false) return;
-    void sessionStore.tryReconnect();
+    void tryReconnect();
   }, 250);
 }
 function handleVisibilityChange() {
@@ -56,18 +71,29 @@ function handleOnline() {
 
 // Preferences store for persisting user selections
 let prefsStore: KVStore | null = null;
+let sessionsStore: KVStore | null = null;
 
-const isConnected = computed(() => sessionStore.isConnected);
-const isLoading = computed(() => sessionStore.isLoading);
-const isConnecting = computed(() => sessionStore.isConnecting);
-const isReconnecting = computed(() => sessionStore.isReconnecting);
-const error = computed(() => sessionStore.error || configStore.error);
+const error = computed(() => sessionError.value || configStore.error);
 const hasAgents = computed(() => configStore.hasAgents);
+const messages = computed<ChatMessage[]>(() => acpClient.value?.messages.value ?? []);
+const pendingPermission = computed<PermissionRequest | null>(
+  () => acpClient.value?.pendingPermissionRequest.value ?? null
+);
+const pendingAuthMethods = computed<AuthMethod[]>(() => acpClient.value?.pendingAuthMethods.value ?? []);
+const pendingAuthAgentName = computed(() => acpClient.value?.pendingAuthAgentName.value ?? '');
+const availableModes = computed<SessionMode[]>(() => acpClient.value?.availableModes.value ?? []);
+const currentModeId = computed(() => acpClient.value?.currentModeId.value ?? '');
+const availableCommands = computed<SlashCommand[]>(() => acpClient.value?.availableCommands.value ?? []);
+const availableModels = computed<ModelInfo[]>(() => acpClient.value?.availableModels.value ?? []);
+const currentModelId = computed(() => acpClient.value?.currentModelId.value ?? '');
+const resumableSessions = computed(() =>
+  savedSessions.value.filter(s => s.supportsLoadSession === true)
+);
 
 // Name of the agent the reconnect banner refers to. Falls back to the
 // generic "agent" if the saved session has no name (shouldn't happen).
 const reconnectingAgentName = computed(
-  () => sessionStore.currentSession?.agentName ?? 'agent'
+  () => currentSession.value?.agentName ?? 'agent'
 );
 
 // True when there is a saved session we *could* reconnect to but the
@@ -79,19 +105,12 @@ const canManuallyReconnect = computed(
     !isConnected.value &&
     !isReconnecting.value &&
     !isConnecting.value &&
-    !!sessionStore.currentSession?.supportsLoadSession
+    !!currentSession.value?.supportsLoadSession
 );
 
 async function handleManualReconnect() {
-  await sessionStore.tryReconnect();
+  await tryReconnect();
 }
-
-// Watch for permission requests from session store
-const pendingPermission = computed(() => sessionStore.pendingPermission);
-
-// Watch for auth method selection requests
-const pendingAuthMethods = computed(() => sessionStore.pendingAuthMethods);
-const pendingAuthAgentName = computed(() => sessionStore.pendingAuthAgentName);
 
 onMounted(async () => {
   // Track viewport width so the sidebar can default-collapse into a drawer
@@ -106,10 +125,11 @@ onMounted(async () => {
 
   // Load persisted preferences first
   prefsStore = await loadKvStore('preferences.json');
+  sessionsStore = await loadKvStore('sessions.json');
+  savedSessions.value = (await sessionsStore.get<SavedSession[]>('sessions')) ?? [];
 
   // Initialize stores
   await configStore.loadConfig();
-  await sessionStore.initStore();
 
   const savedCwd = await prefsStore.get<string>('lastCwd');
   if (savedCwd) {
@@ -127,6 +147,52 @@ onMounted(async () => {
     window.addEventListener('online', handleOnline);
   }
 });
+
+async function saveSessionsToStore() {
+  if (sessionsStore) {
+    await sessionsStore.set('sessions', savedSessions.value);
+    await sessionsStore.save();
+  }
+}
+
+async function createClient(agentName: string): Promise<AcpClientBridge> {
+  const agentConfig = configStore.getAgent(agentName);
+  if (!agentConfig) {
+    throw new Error(`Agent '${agentName}' not found in config`);
+  }
+  if (acpClient.value) {
+    await acpClient.value.disconnect();
+    acpClient.value = null;
+  }
+  const client = await createAcpClient({ name: agentName, config: agentConfig });
+  client.onTransportClose = handleUnexpectedClose;
+  acpClient.value = client;
+  return client;
+}
+
+function handleUnexpectedClose(reason?: string): void {
+  if (!acpClient.value) return;
+  acpClient.value = null;
+  isConnected.value = false;
+  isLoading.value = false;
+  sessionError.value = `Connection lost: ${reason ?? 'websocket closed'}`;
+}
+
+function startConnectionTimer() {
+  startupPhase.value = 'connecting';
+  startupLogs.value = [];
+  startupElapsed.value = 0;
+  startupTimer = setInterval(() => {
+    startupElapsed.value++;
+  }, 1000);
+}
+
+function stopConnectionTimer() {
+  if (startupTimer) {
+    clearInterval(startupTimer);
+    startupTimer = null;
+  }
+}
 
 /** Persist a typed cwd as the user edits it (mobile / web field). */
 async function handleCwdInput(event: Event) {
@@ -147,57 +213,188 @@ async function handleNewSession() {
   // a helpful error rather than letting the agent reject `session/new`.
   const cwd = selectedCwd.value.trim();
   if (!cwd) {
-    sessionStore.error = 'Please enter a working directory (absolute path on the agent\u2019s machine).';
+    sessionError.value = 'Please enter a working directory (absolute path on the agent\u2019s machine).';
     return;
   }
   const isAbsolute = cwd.startsWith('/') || /^[A-Za-z]:[\\/]/.test(cwd);
   if (!isAbsolute) {
-    sessionStore.error = `Working directory must be an absolute path (got: ${cwd}).`;
+    sessionError.value = `Working directory must be an absolute path (got: ${cwd}).`;
     return;
   }
 
+  isLoading.value = true;
+  isConnecting.value = true;
+  connectionAborted = false;
+  sessionError.value = null;
+  startConnectionTimer();
+
   try {
-    await sessionStore.createSession(selectedAgent.value, cwd);
+    const client = await createClient(selectedAgent.value);
+    const result = await client.startNewSession(
+      selectedAgent.value,
+      cwd,
+      appVersion,
+      () => connectionAborted
+    );
+    const session: SavedSession = {
+      id: crypto.randomUUID(),
+      agentName: selectedAgent.value,
+      sessionId: result.sessionId,
+      title: `Session ${new Date().toLocaleString()}`,
+      lastUpdated: Date.now(),
+      cwd,
+      supportsLoadSession: result.supportsLoadSession,
+    };
+    currentSession.value = session;
+    savedSessions.value.push(session);
+    await saveSessionsToStore();
+    isConnected.value = true;
   } catch (e) {
+    sessionError.value = e instanceof Error ? e.message : String(e);
+    if (acpClient.value) {
+      try {
+        await acpClient.value.disconnect();
+      } catch (cleanupErr) {
+        console.warn('disconnect during createSession cleanup failed:', cleanupErr);
+      }
+      acpClient.value = null;
+    }
     console.error('Failed to create session:', e);
+  } finally {
+    isLoading.value = false;
+    isConnecting.value = false;
+    stopConnectionTimer();
   }
 }
 
 async function handleResumeSession(session: SavedSession) {
   selectedAgent.value = session.agentName;
   try {
-    await sessionStore.resumeSession(session);
+    await resumeSession(session);
   } catch (e) {
     console.error('Failed to resume session:', e);
   }
 }
 
+async function resumeSession(session: SavedSession) {
+  isLoading.value = true;
+  connectionAborted = false;
+  sessionError.value = null;
+
+  try {
+    const client = await createClient(session.agentName);
+    await client.loadSavedSession(session, appVersion, () => connectionAborted);
+    currentSession.value = session;
+    isConnected.value = true;
+    session.lastUpdated = Date.now();
+    await saveSessionsToStore();
+  } catch (e) {
+    sessionError.value = e instanceof Error ? e.message : String(e);
+    if (acpClient.value) {
+      try {
+        await acpClient.value.disconnect();
+      } catch (cleanupErr) {
+        console.warn('disconnect during resumeSession cleanup failed:', cleanupErr);
+      }
+      acpClient.value = null;
+    }
+    throw e;
+  } finally {
+    isLoading.value = false;
+  }
+}
+
 async function handleDeleteSession(sessionId: string) {
-  await sessionStore.deleteSession(sessionId);
+  savedSessions.value = savedSessions.value.filter(s => s.id !== sessionId);
+  await saveSessionsToStore();
 }
 
 async function handleDisconnect() {
-  await sessionStore.disconnect();
+  if (acpClient.value) {
+    await acpClient.value.disconnect();
+    acpClient.value = null;
+  }
+  currentSession.value = null;
+  isConnected.value = false;
 }
 
 async function handleCancelConnection() {
-  await sessionStore.cancelConnection();
+  connectionAborted = true;
+  acpClient.value?.cancelAuthSelection();
+  if (acpClient.value) {
+    try {
+      await acpClient.value.disconnect();
+    } catch (e) {
+      console.error('Error disconnecting:', e);
+    }
+    acpClient.value = null;
+  }
+  isLoading.value = false;
+  isConnecting.value = false;
+  sessionError.value = null;
 }
 
 function handlePermissionSelect(optionId: string) {
-  sessionStore.resolvePermission(optionId);
+  acpClient.value?.resolvePermission(optionId);
 }
 
 function handlePermissionCancel() {
-  sessionStore.cancelPermission();
+  acpClient.value?.cancelPermission();
 }
 
 function handleAuthMethodSelect(methodId: string) {
-  sessionStore.selectAuthMethod(methodId);
+  acpClient.value?.selectAuthMethod(methodId);
 }
 
 function handleAuthMethodCancel() {
-  sessionStore.cancelAuthSelection();
+  acpClient.value?.cancelAuthSelection();
+}
+
+async function handleSendPrompt(text: string) {
+  if (!acpClient.value || !currentSession.value) {
+    sessionError.value = 'No active session';
+    return;
+  }
+
+  isLoading.value = true;
+  try {
+    const response = await acpClient.value.sendPromptText(currentSession.value.sessionId, text);
+    console.log('Prompt completed:', response.stopReason);
+    if (messages.value.length === 2 && currentSession.value) {
+      currentSession.value.title = text.slice(0, 50) + (text.length > 50 ? '...' : '');
+      currentSession.value.lastUpdated = Date.now();
+      await saveSessionsToStore();
+    }
+  } catch (e) {
+    sessionError.value = e instanceof Error ? e.message : String(e);
+    console.error('Failed to send prompt:', e);
+  } finally {
+    isLoading.value = false;
+  }
+}
+
+async function handleCancelOperation() {
+  if (acpClient.value && currentSession.value) {
+    await acpClient.value.cancelSession(currentSession.value.sessionId);
+  }
+}
+
+async function handleModeChange(modeId: string) {
+  if (!acpClient.value || !currentSession.value) return;
+  try {
+    await acpClient.value.setSessionMode(currentSession.value.sessionId, modeId);
+  } catch (e) {
+    console.error('Failed to change mode:', e);
+  }
+}
+
+async function handleModelChange(modelId: string) {
+  if (!acpClient.value || !currentSession.value) return;
+  try {
+    await acpClient.value.setSessionModel(currentSession.value.sessionId, modelId);
+  } catch (e) {
+    console.error('Failed to change model:', e);
+  }
 }
 
 function toggleSidebar() {
@@ -228,8 +425,30 @@ onBeforeUnmount(() => {
 });
 
 function clearError() {
-  sessionStore.clearError();
+  sessionError.value = null;
   configStore.clearError();
+}
+
+async function tryReconnect(): Promise<boolean> {
+  if (isConnected.value || isConnecting.value || isLoading.value) {
+    return false;
+  }
+  const session = currentSession.value;
+  if (!session || acpClient.value || !session.supportsLoadSession) {
+    return false;
+  }
+
+  sessionError.value = null;
+  isReconnecting.value = true;
+  try {
+    await resumeSession(session);
+    return true;
+  } catch (e) {
+    console.warn('Foreground reconnect failed:', e);
+    return true;
+  } finally {
+    isReconnecting.value = false;
+  }
 }
 </script>
 
@@ -291,9 +510,9 @@ function clearError() {
           <StartupProgress
             v-if="isConnecting"
             :agent-name="selectedAgent"
-            :phase="sessionStore.startupPhase"
-            :logs="sessionStore.startupLogs"
-            :elapsed-seconds="sessionStore.startupElapsed"
+            :phase="startupPhase"
+            :logs="startupLogs"
+            :elapsed-seconds="startupElapsed"
             :show-details="showStartupDetails"
             @cancel="handleCancelConnection"
             @toggle-details="showStartupDetails = !showStartupDetails"
@@ -311,6 +530,7 @@ function clearError() {
         <!-- Session List -->
         <div class="section">
           <SessionList
+            :sessions="resumableSessions"
             @resume="handleResumeSession"
             @delete="handleDeleteSession"
           />
@@ -372,7 +592,22 @@ function clearError() {
         </div>
 
         <!-- Chat View when connected -->
-        <ChatView v-if="isConnected" />
+        <ChatView
+          v-if="isConnected"
+          :messages="messages"
+          :is-loading="isLoading"
+          :is-reconnecting="isReconnecting"
+          :current-session="currentSession"
+          :available-modes="availableModes"
+          :current-mode-id="currentModeId"
+          :available-models="availableModels"
+          :current-model-id="currentModelId"
+          :available-commands="availableCommands"
+          @send="handleSendPrompt"
+          @cancel="handleCancelOperation"
+          @mode-change="handleModeChange"
+          @model-change="handleModelChange"
+        />
 
         <!-- Welcome screen when not connected -->
         <div v-else class="welcome-screen">
