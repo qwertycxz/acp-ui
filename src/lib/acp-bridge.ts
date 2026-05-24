@@ -45,18 +45,18 @@ function getTrafficStore() {
 const JSONRPC_METHOD_NOT_FOUND = -32601;
 const PROTOCOL_VERSION = 1;
 
-interface SessionStartResult {
-  sessionId: string;
-  supportsLoadSession: boolean;
-}
-
 export class AcpClientBridge implements Client {
-  private socket: WebSocket;
+  private socket: WebSocket | null = null;
+  private readonly url: string;
+  private socketReadyState = ref<number>(WebSocket.CLOSED);
+  private connectPromise: Promise<void> | null = null;
   private messageResolvers: Map<number, (response: unknown) => void> = new Map();
   private messageRejecters: Map<number, (error: Error) => void> = new Map();
   private pendingMethods: Map<number, string> = new Map();
   private nextRequestId = 0;
   private disconnected = false;
+  private connectionAborted = false;
+  private startupTimer: ReturnType<typeof setInterval> | null = null;
 
   public pendingPermissionRequest: Ref<LocalPermissionRequest | null> = ref(null);
   private permissionResolver: PermissionResolver | null = null;
@@ -72,11 +72,33 @@ export class AcpClientBridge implements Client {
   public availableModels: Ref<ModelInfo[]> = ref([]);
   public currentModelId = ref('');
 
-  public onTransportClose: ((reason?: string) => void) | null = null;
+  public currentSession: Ref<SavedSession | null> = ref(null);
+  public isLoading = ref(false);
+  public isConnecting = ref(false);
+  public isReconnecting = ref(false);
+  public sessionError: Ref<string | null> = ref(null);
+  public startupPhase = ref('starting');
+  public startupLogs: Ref<string[]> = ref([]);
+  public startupElapsed = ref(0);
 
-  constructor(socket: WebSocket) {
+  constructor(url: string) {
+    this.url = url;
+  }
+
+  public get isConnected(): boolean {
+    return this.socketReadyState.value === WebSocket.OPEN && this.currentSession.value !== null;
+  }
+
+  async connect(): Promise<void> {
+    if (this.socketReadyState.value === WebSocket.OPEN) return;
+    if (this.connectPromise) return this.connectPromise;
+    if (this.disconnected) {
+      throw new Error('WebSocket is closed');
+    }
+
+    const socket = new WebSocket(this.url);
     this.socket = socket;
-
+    this.socketReadyState.value = socket.readyState;
     socket.addEventListener('message', (event) => {
       this.handleSocketMessage(event);
     });
@@ -88,19 +110,55 @@ export class AcpClientBridge implements Client {
     socket.addEventListener('error', () => {
       this.handleSocketClose('websocket error');
     });
-  }
 
-  async connect(): Promise<void> {
-    // No-op: the factory hands us an already-open WebSocket.
+    this.connectPromise = new Promise<void>((resolve, reject) => {
+      function cleanup() {
+        socket.removeEventListener('open', handleOpen);
+        socket.removeEventListener('error', handleError);
+        socket.removeEventListener('close', handleClose);
+      }
+      const handleOpen = () => {
+        cleanup();
+        this.socketReadyState.value = socket.readyState;
+        resolve();
+      };
+      const handleError = () => {
+        cleanup();
+        reject(new Error('WebSocket connect failed'));
+      };
+      const handleClose = (event: CloseEvent) => {
+        cleanup();
+        reject(
+          new Error(
+            `WebSocket closed before open (code=${event.code}, reason=${event.reason || 'unknown'})`
+          )
+        );
+      };
+
+      socket.addEventListener('open', handleOpen);
+      socket.addEventListener('error', handleError);
+      socket.addEventListener('close', handleClose);
+    });
+
+    try {
+      await this.connectPromise;
+    } finally {
+      this.connectPromise = null;
+    }
   }
 
   async disconnect(): Promise<void> {
     if (this.disconnected) return;
     this.disconnected = true;
     this.rejectInFlight(new Error('websocket closed: client disconnected'));
+    this.stopConnectionTimer();
+    this.isLoading.value = false;
+    this.isConnecting.value = false;
+    this.isReconnecting.value = false;
+    this.socketReadyState.value = WebSocket.CLOSED;
     if (
-      this.socket.readyState === WebSocket.OPEN ||
-      this.socket.readyState === WebSocket.CONNECTING
+      this.socket?.readyState === WebSocket.OPEN ||
+      this.socket?.readyState === WebSocket.CONNECTING
     ) {
       this.socket.close(1000, 'client closed');
     }
@@ -124,9 +182,12 @@ export class AcpClientBridge implements Client {
     if (this.disconnected) return;
     this.disconnected = true;
     this.rejectInFlight(new Error(reason));
-    if (this.onTransportClose) {
-      this.onTransportClose(reason);
-    }
+    this.stopConnectionTimer();
+    this.socketReadyState.value = WebSocket.CLOSED;
+    this.isLoading.value = false;
+    this.isConnecting.value = false;
+    this.isReconnecting.value = false;
+    this.sessionError.value = `Connection lost: ${reason}`;
   }
 
   private rejectInFlight(error: Error): void {
@@ -412,7 +473,7 @@ export class AcpClientBridge implements Client {
   }
 
   private sendFrame(json: string): void {
-    if (this.disconnected || this.socket.readyState === WebSocket.CLOSED) {
+    if (!this.socket || this.disconnected || this.socket.readyState === WebSocket.CLOSED) {
       throw new Error('WebSocket is closed');
     }
     if (this.socket.readyState !== WebSocket.OPEN) {
@@ -480,6 +541,23 @@ export class AcpClientBridge implements Client {
     this.currentModelId.value = '';
   }
 
+  private startConnectionTimer(): void {
+    this.startupPhase.value = 'connecting';
+    this.startupLogs.value = [];
+    this.startupElapsed.value = 0;
+    this.stopConnectionTimer();
+    this.startupTimer = setInterval(() => {
+      this.startupElapsed.value++;
+    }, 1000);
+  }
+
+  private stopConnectionTimer(): void {
+    if (this.startupTimer) {
+      clearInterval(this.startupTimer);
+      this.startupTimer = null;
+    }
+  }
+
   private applyNewSessionMetadata(sessionResponse: NewSessionResponse): void {
     if (sessionResponse.modes) {
       this.availableModes.value = (sessionResponse.modes.availableModes || []).map(m => ({
@@ -506,8 +584,8 @@ export class AcpClientBridge implements Client {
     }
   }
 
-  private assertNotAborted(shouldAbort?: () => boolean): void {
-    if (shouldAbort?.()) {
+  private assertNotAborted(): void {
+    if (this.connectionAborted) {
       throw new Error('Connection cancelled');
     }
   }
@@ -538,87 +616,131 @@ export class AcpClientBridge implements Client {
     error: unknown,
     authMethods: AuthMethod[],
     agentName: string,
-    retry: () => Promise<T>,
-    shouldAbort?: () => boolean
+    retry: () => Promise<T>
   ): Promise<T> {
     if (!this.isAuthenticationRequired(error) || authMethods.length === 0) {
       throw error;
     }
 
     const selectedMethodId = await this.promptForAuthMethod(authMethods, agentName);
-    this.assertNotAborted(shouldAbort);
+    this.assertNotAborted();
     if (!selectedMethodId) {
       await this.disconnect();
       throw new Error('Authentication cancelled by user');
     }
 
     await this.authenticate({ methodId: selectedMethodId });
-    this.assertNotAborted(shouldAbort);
+    this.assertNotAborted();
     return retry();
   }
 
   async startNewSession(
     agentName: string,
     cwd: string,
-    appVersion: string,
-    shouldAbort?: () => boolean
-  ): Promise<SessionStartResult> {
-    this.assertNotAborted(shouldAbort);
-    this.resetSessionData();
-    const initResponse = await this.initializeForSession(appVersion);
-    const authMethods = initResponse.authMethods || [];
-    const supportsLoadSession = initResponse.agentCapabilities?.loadSession ?? false;
-    this.assertNotAborted(shouldAbort);
+    appVersion: string
+  ): Promise<void> {
+    this.isLoading.value = true;
+    this.isConnecting.value = true;
+    this.connectionAborted = false;
+    this.sessionError.value = null;
+    this.currentSession.value = null;
+    this.startConnectionTimer();
 
-    const sessionResponse = await this.newSession({ cwd, mcpServers: [] }).catch((error: unknown) =>
-      this.retryWithAuth(
-        error,
-        authMethods,
+    try {
+      await this.connect();
+      this.assertNotAborted();
+      this.resetSessionData();
+      const initResponse = await this.initializeForSession(appVersion);
+      const authMethods = initResponse.authMethods || [];
+      const supportsLoadSession = initResponse.agentCapabilities?.loadSession ?? false;
+      this.assertNotAborted();
+
+      const sessionResponse = await this.newSession({ cwd, mcpServers: [] }).catch((error: unknown) =>
+        this.retryWithAuth(
+          error,
+          authMethods,
+          agentName,
+          () => this.newSession({ cwd, mcpServers: [] })
+        )
+      );
+      this.assertNotAborted();
+      this.applyNewSessionMetadata(sessionResponse);
+      const session = {
+        id: crypto.randomUUID(),
         agentName,
-        () => this.newSession({ cwd, mcpServers: [] }),
-        shouldAbort
-      )
-    );
-    this.assertNotAborted(shouldAbort);
-    this.applyNewSessionMetadata(sessionResponse);
-    return {
-      sessionId: sessionResponse.sessionId,
-      supportsLoadSession,
-    };
+        sessionId: sessionResponse.sessionId,
+        title: `Session ${new Date().toLocaleString()}`,
+        lastUpdated: Date.now(),
+        cwd,
+        supportsLoadSession,
+      };
+      this.currentSession.value = session;
+    } catch (e) {
+      this.sessionError.value = e instanceof Error ? e.message : String(e);
+      await this.disconnect();
+      throw e;
+    } finally {
+      this.isLoading.value = false;
+      this.isConnecting.value = false;
+      this.stopConnectionTimer();
+    }
   }
 
   async loadSavedSession(
     savedSession: SavedSession,
     appVersion: string,
-    shouldAbort?: () => boolean
+    reconnecting = false
   ): Promise<void> {
-    this.assertNotAborted(shouldAbort);
-    const initResponse = await this.initializeForSession(appVersion);
-    const authMethods = initResponse.authMethods || [];
-    this.resetSessionData();
-    this.assertNotAborted(shouldAbort);
+    this.isLoading.value = true;
+    this.isReconnecting.value = reconnecting;
+    this.connectionAborted = false;
+    this.sessionError.value = null;
 
-    await this.loadSession({
-      sessionId: savedSession.sessionId,
-      cwd: savedSession.cwd,
-      mcpServers: [],
-    }).catch((error: unknown) =>
-      this.retryWithAuth(
-        error,
-        authMethods,
-        savedSession.agentName,
-        () =>
-          this.loadSession({
-            sessionId: savedSession.sessionId,
-            cwd: savedSession.cwd,
-            mcpServers: [],
-          }),
-        shouldAbort
-      )
-    );
+    try {
+      await this.connect();
+      this.assertNotAborted();
+      const initResponse = await this.initializeForSession(appVersion);
+      const authMethods = initResponse.authMethods || [];
+      this.resetSessionData();
+      this.assertNotAborted();
+
+      await this.loadSession({
+        sessionId: savedSession.sessionId,
+        cwd: savedSession.cwd,
+        mcpServers: [],
+      }).catch((error: unknown) =>
+        this.retryWithAuth(
+          error,
+          authMethods,
+          savedSession.agentName,
+          () =>
+            this.loadSession({
+              sessionId: savedSession.sessionId,
+              cwd: savedSession.cwd,
+              mcpServers: [],
+            })
+        )
+      );
+      this.currentSession.value = savedSession;
+      savedSession.lastUpdated = Date.now();
+    } catch (e) {
+      this.sessionError.value = e instanceof Error ? e.message : String(e);
+      await this.disconnect();
+      throw e;
+    } finally {
+      this.isLoading.value = false;
+      this.isReconnecting.value = false;
+    }
   }
 
-  async sendPromptText(sessionId: string, text: string): Promise<PromptResponse> {
+  async sendPromptText(text: string): Promise<PromptResponse> {
+    const sessionId = this.currentSession.value?.sessionId;
+    if (!sessionId) {
+      this.sessionError.value = 'No active session';
+      throw new Error('No active session');
+    }
+
+    this.isLoading.value = true;
     this.messages.value.push({
       id: crypto.randomUUID(),
       role: 'user',
@@ -626,29 +748,60 @@ export class AcpClientBridge implements Client {
       timestamp: Date.now(),
     });
 
-    return this.prompt({
-      sessionId,
-      prompt: [
-        {
-          type: 'text',
-          text,
-        },
-      ],
-    });
+    try {
+      return await this.prompt({
+        sessionId,
+        prompt: [
+          {
+            type: 'text',
+            text,
+          },
+        ],
+      });
+    } catch (e) {
+      this.sessionError.value = e instanceof Error ? e.message : String(e);
+      throw e;
+    } finally {
+      this.isLoading.value = false;
+    }
   }
 
-  async cancelSession(sessionId: string): Promise<void> {
-    await this.cancel({ sessionId });
+  async cancelCurrentSession(): Promise<void> {
+    const sessionId = this.currentSession.value?.sessionId;
+    if (sessionId) {
+      await this.cancel({ sessionId });
+    }
   }
 
-  async setSessionMode(sessionId: string, modeId: string): Promise<void> {
+  async setSessionMode(modeId: string): Promise<void> {
+    const sessionId = this.currentSession.value?.sessionId;
+    if (!sessionId) return;
     await this.setMode({ sessionId, modeId });
     this.currentModeId.value = modeId;
   }
 
-  async setSessionModel(sessionId: string, modelId: string): Promise<void> {
+  async setSessionModel(modelId: string): Promise<void> {
+    const sessionId = this.currentSession.value?.sessionId;
+    if (!sessionId) return;
     await this.unstable_setSessionModel({ sessionId, modelId });
     this.currentModelId.value = modelId;
+  }
+
+  cancelConnection(): void {
+    this.connectionAborted = true;
+    this.cancelAuthSelection();
+  }
+
+  clearError(): void {
+    this.sessionError.value = null;
+  }
+
+  setError(message: string): void {
+    this.sessionError.value = message;
+  }
+
+  setCurrentSession(session: SavedSession | null): void {
+    this.currentSession.value = session;
   }
 
   async requestPermission(
@@ -726,33 +879,5 @@ export async function createAcpClient(
     throw new Error(`Agent '${arg.name}' is missing 'url' for websocket transport`);
   }
 
-  const socket = new WebSocket(arg.config.url);
-  await new Promise<void>((resolve, reject) => {
-    function cleanup() {
-      socket.removeEventListener('open', handleOpen);
-      socket.removeEventListener('error', handleError);
-      socket.removeEventListener('close', handleClose);
-    }
-    function handleOpen() {
-      cleanup();
-      resolve();
-    }
-    function handleError() {
-      cleanup();
-      reject(new Error('WebSocket connect failed'));
-    }
-    function handleClose(event: CloseEvent) {
-      cleanup();
-      reject(
-        new Error(
-          `WebSocket closed before open (code=${event.code}, reason=${event.reason || 'unknown'})`
-        )
-      );
-    }
-
-    socket.addEventListener('open', handleOpen);
-    socket.addEventListener('error', handleError);
-    socket.addEventListener('close', handleClose);
-  });
-  return new AcpClientBridge(socket);
+  return new AcpClientBridge(arg.config.url);
 }
