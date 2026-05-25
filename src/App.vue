@@ -2,7 +2,7 @@
 import { ref, computed, reactive, onMounted, onBeforeUnmount } from 'vue';
 import { loadKvStore, type KVStore } from './lib/host';
 import { useConfigStore } from './stores/config';
-import { AcpClientBridge, createAcpClient } from './lib/acp-bridge';
+import { AcpClientBridge } from './lib/acp-bridge';
 import AgentSelector from './components/AgentSelector.vue';
 import SessionList from './components/SessionList.vue';
 import ChatView from './components/ChatView.vue';
@@ -191,15 +191,15 @@ async function saveSessionsToStore() {
 }
 
 async function createClient(agentName: string): Promise<AcpClient> {
-  const agentConfig = configStore.getAgent(agentName);
-  if (!agentConfig) {
+  const url = configStore.getAgent(agentName);
+  if (!url) {
     throw new Error(`Agent '${agentName}' not found in config`);
   }
   if (acpClient.value) {
     await acpClient.value.disconnect();
     acpClient.value = null;
   }
-  const client = reactive(await createAcpClient({ name: agentName, config: agentConfig }));
+  const client = reactive(new AcpClientBridge(url));
   acpClient.value = client;
   return client;
 }
@@ -216,9 +216,9 @@ async function handleCwdInput(event: Event) {
 
 async function handleNewSession() {
   if (!selectedAgent.value) return;
-  const agentConfig = configStore.getAgent(selectedAgent.value);
-  if (!agentConfig?.url) {
-    configStore.setError(`Agent '${selectedAgent.value}' is missing 'url' for websocket transport`);
+  const url = configStore.getAgent(selectedAgent.value);
+  if (!url) {
+    configStore.setError(`Agent '${selectedAgent.value}' is missing a WebSocket URL`);
     return;
   }
 
@@ -408,11 +408,11 @@ async function tryReconnect(): Promise<boolean> {
   }
 
   try {
-    const agentConfig = configStore.getAgent(session.agentName);
-    if (!agentConfig) {
+    const url = configStore.getAgent(session.agentName);
+    if (!url) {
       throw new Error(`Agent '${session.agentName}' not found in config`);
     }
-    const client = reactive(await createAcpClient({ name: session.agentName, config: agentConfig }));
+    const client = reactive(new AcpClientBridge(url));
     client.setCurrentSession(session);
     acpClient.value = client;
     await client.loadSavedSession(session, appVersion, true);

@@ -17,7 +17,15 @@ function loadWebConfig(): AgentsConfig {
   try {
     const parsed = JSON.parse(raw);
     if (parsed && typeof parsed === 'object' && parsed.agents) {
-      return parsed as AgentsConfig;
+      const agents: Record<string, string> = {};
+      for (const [name, value] of Object.entries(parsed.agents)) {
+        if (typeof value === 'string') {
+          agents[name] = value;
+        } else if (value && typeof value === 'object' && typeof (value as { url?: unknown }).url === 'string') {
+          agents[name] = (value as { url: string }).url;
+        }
+      }
+      return { agents };
     }
   } catch (e) {
     console.warn('Failed to parse stored agents config:', e);
@@ -49,12 +57,9 @@ export async function addAgent(
   const url = remote.url?.trim();
   if (!url) throw new Error('remote agent requires a url');
   if (!/^(ws|wss):\/\//i.test(url)) {
-    throw new Error(`URL scheme does not match transport 'websocket': ${url}`);
+    throw new Error(`WebSocket URL must start with ws:// or wss://: ${url}`);
   }
-  config.agents[name] = {
-    transport: 'websocket',
-    url,
-  };
+  config.agents[name] = url;
   saveWebConfig(config);
   return config;
 }
@@ -67,12 +72,9 @@ export async function updateAgent(
   const url = remote.url?.trim();
   if (!url) throw new Error('remote agent requires a url');
   if (!/^(ws|wss):\/\//i.test(url)) {
-    throw new Error(`URL scheme does not match transport 'websocket': ${url}`);
+    throw new Error(`WebSocket URL must start with ws:// or wss://: ${url}`);
   }
-  config.agents[name] = {
-    transport: 'websocket',
-    url,
-  };
+  config.agents[name] = url;
   saveWebConfig(config);
   return config;
 }

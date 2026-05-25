@@ -1,12 +1,7 @@
 // Types for ACP UI application
 
-export interface AgentConfig {
-  transport?: 'websocket';
-  url?: string;
-}
-
 export interface AgentsConfig {
-  agents: Record<string, AgentConfig>;
+  agents: Record<string, string>;
 }
 
 export interface SavedSession {

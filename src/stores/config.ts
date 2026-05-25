@@ -1,7 +1,7 @@
 // Agent configuration store
 import { defineStore } from 'pinia';
 import { ref, computed } from 'vue';
-import type { AgentsConfig, AgentConfig } from '../lib/types';
+import type { AgentsConfig } from '../lib/types';
 import { getConfig } from '../lib/host';
 
 export const useConfigStore = defineStore('config', () => {
@@ -24,7 +24,7 @@ export const useConfigStore = defineStore('config', () => {
     }
   }
 
-  function getAgent(name: string): AgentConfig | undefined {
+  function getAgent(name: string): string | undefined {
     return config.value.agents[name];
   }
 

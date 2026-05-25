@@ -31,10 +31,7 @@ Example remote agent:
 ```json
 {
   "agents": {
-    "Copilot CLI (remote)": {
-      "transport": "websocket",
-      "url": "wss://acp.example.com/v1"
-    }
+    "Copilot CLI (remote)": "wss://acp.example.com/v1"
   }
 }
 ```

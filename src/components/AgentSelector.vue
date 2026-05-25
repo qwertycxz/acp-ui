@@ -26,7 +26,7 @@ watch(agents, (newAgents) => {
         {{ hasAgents ? 'Select an agent...' : 'No agents configured' }}
       </option>
       <option v-for="agent in agents" :key="agent" :value="agent">
-        {{ agent }} (websocket)
+        {{ agent }}
       </option>
     </select>
 

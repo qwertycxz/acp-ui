@@ -15,9 +15,9 @@ interface AgentRow {
 }
 
 const agents = computed<AgentRow[]>(() =>
-  Object.entries(configStore.config.agents).map(([name, config]) => ({
+  Object.entries(configStore.config.agents).map(([name, url]) => ({
     name,
-    url: config.url ?? '',
+    url,
   }))
 );
 
@@ -184,7 +184,6 @@ async function handleDelete(name: string) {
               <div class="agent-info">
                 <div class="agent-name">
                   {{ agent.name }}
-                  <span class="agent-transport-badge">websocket</span>
                 </div>
                 <div class="agent-command">
                   <code>{{ agent.url }}</code>
@@ -220,22 +219,6 @@ async function handleDelete(name: string) {
   align-items: center;
   justify-content: center;
   z-index: 1000;
-}
-
-.agent-transport-badge {
-  display: inline-block;
-  margin-left: 0.5rem;
-  padding: 0.1rem 0.5rem;
-  border-radius: 999px;
-  font-size: 0.7rem;
-  font-weight: 600;
-  letter-spacing: 0.02em;
-  text-transform: uppercase;
-  vertical-align: middle;
-  border: 1px solid transparent;
-  background: #e0f2fe;
-  color: #0369a1;
-  border-color: #bae6fd;
 }
 
 .settings-panel {

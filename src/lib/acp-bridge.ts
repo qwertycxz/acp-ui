@@ -19,7 +19,6 @@ import type {
   AuthMethod,
 } from '@agentclientprotocol/sdk';
 import type {
-  AgentConfig,
   ChatMessage,
   ModelInfo,
   PermissionRequest as LocalPermissionRequest,
@@ -870,14 +869,4 @@ export class AcpClientBridge implements Client {
     // This is called by the agent; inbound notifications are handled above.
   }
 
-}
-
-export async function createAcpClient(
-  arg: { name: string; config: AgentConfig }
-): Promise<AcpClientBridge> {
-  if (!arg.config.url) {
-    throw new Error(`Agent '${arg.name}' is missing 'url' for websocket transport`);
-  }
-
-  return new AcpClientBridge(arg.config.url);
 }
