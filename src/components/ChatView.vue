@@ -153,7 +153,6 @@ function getStatusIcon(status: string): string {
           :disabled="props.isLoading"
           @change="(modeId) => emit('modeChange', modeId)"
         />
-        <span class="agent-name">{{ props.currentSession?.agentName }}</span>
       </div>
     </div>
 
@@ -272,11 +271,6 @@ function getStatusIcon(status: string): string {
   display: flex;
   align-items: center;
   gap: 0.75rem;
-}
-
-.agent-name {
-  font-size: 0.875rem;
-  color: var(--text-accent, #0066cc);
 }
 
 .messages-container {
@@ -495,13 +489,6 @@ textarea:focus {
   .chat-header {
     padding-top: calc(1rem + env(safe-area-inset-top, 0));
     padding-left: calc(44px + 1rem);
-  }
-
-  /* Agent identity is already shown in the sidebar drawer; on a phone the
-     chat header should belong to mode/model/actions. Hiding the long name
-     also avoids awkward 4-line wraps for names like "Copilot CLI dev tunnel". */
-  .agent-name {
-    display: none;
   }
 
   /* Session title is also redundant on mobile (visible in the sidebar

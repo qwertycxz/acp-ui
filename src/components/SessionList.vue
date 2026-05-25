@@ -42,7 +42,6 @@ function handleDelete(sessionId: string, event: Event) {
       >
         <div class="session-info">
           <span class="session-title">{{ session.title }}</span>
-          <span class="session-agent">{{ session.agentName }}</span>
           <span class="session-date">{{ new Date(session.lastUpdated).toLocaleString() }}</span>
         </div>
         <button
@@ -113,11 +112,6 @@ ul {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-}
-
-.session-agent {
-  font-size: 0.75rem;
-  color: var(--text-accent, #0066cc);
 }
 
 .session-date {

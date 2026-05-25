@@ -1,73 +1,33 @@
 <script setup lang="ts">
-import { ref, computed } from 'vue';
+import { ref, watch } from 'vue';
 import { useConfigStore } from '../stores/config';
-import { addAgent, removeAgent, updateAgent } from '../lib/host';
+import { saveConfig } from '../lib/host';
 
 const emit = defineEmits<{
   (e: 'close'): void;
 }>();
 
 const configStore = useConfigStore();
-
-interface AgentRow {
-  name: string;
-  url: string;
-}
-
-const agents = computed<AgentRow[]>(() =>
-  Object.entries(configStore.config.agents).map(([name, url]) => ({
-    name,
-    url,
-  }))
-);
-
-// Form state
-const showAddForm = ref(false);
-const editingAgent = ref<string | null>(null);
-const formName = ref('');
-const formUrl = ref('');
+const url = ref(configStore.config.url);
 const formError = ref('');
 const isSubmitting = ref(false);
 
-function resetForm() {
-  formName.value = '';
-  formUrl.value = '';
-  formError.value = '';
-  showAddForm.value = false;
-  editingAgent.value = null;
-}
-
-function startAdd() {
-  resetForm();
-  showAddForm.value = true;
-}
-
-function startEdit(agent: AgentRow) {
-  resetForm();
-  editingAgent.value = agent.name;
-  formName.value = agent.name;
-  formUrl.value = agent.url;
-}
+watch(
+  () => configStore.config.url,
+  (newUrl) => {
+    url.value = newUrl;
+  }
+);
 
 async function handleSubmit() {
   formError.value = '';
 
-  if (!formName.value.trim()) {
-    formError.value = 'Name is required';
+  const trimmedUrl = url.value.trim();
+  if (!trimmedUrl) {
+    formError.value = 'URL is required';
     return;
   }
-
-  // Validate agent name is not purely numeric (JavaScript object key ordering issue)
-  if (/^\d+$/.test(formName.value)) {
-    formError.value = 'Agent name cannot be purely numeric';
-    return;
-  }
-
-  if (!formUrl.value.trim()) {
-    formError.value = 'URL is required for remote agents';
-    return;
-  }
-  if (!/^(ws|wss):\/\//i.test(formUrl.value.trim())) {
+  if (!/^(ws|wss):\/\//i.test(trimmedUrl)) {
     formError.value = 'WebSocket URL must start with ws:// or wss://';
     return;
   }
@@ -75,40 +35,12 @@ async function handleSubmit() {
   isSubmitting.value = true;
 
   try {
-    if (editingAgent.value) {
-      configStore.updateFromEvent(
-        await updateAgent(formName.value, {
-          url: formUrl.value.trim(),
-        })
-      );
-    } else {
-      // Check for duplicates
-      if (configStore.config.agents[formName.value]) {
-        formError.value = 'An agent with this name already exists';
-        isSubmitting.value = false;
-        return;
-      }
-      configStore.updateFromEvent(
-        await addAgent(formName.value, {
-          url: formUrl.value.trim(),
-        })
-      );
-    }
-    resetForm();
+    configStore.updateFromEvent(await saveConfig(trimmedUrl));
+    emit('close');
   } catch (e) {
     formError.value = e instanceof Error ? e.message : String(e);
   } finally {
     isSubmitting.value = false;
-  }
-}
-
-async function handleDelete(name: string) {
-  if (!confirm(`Delete agent "${name}"?`)) return;
-
-  try {
-    configStore.updateFromEvent(await removeAgent(name));
-  } catch (e) {
-    console.error('Failed to delete agent:', e);
   }
 }
 </script>
@@ -122,89 +54,39 @@ async function handleDelete(name: string) {
       </div>
 
       <div class="settings-content">
-        <section class="agents-section">
-          <div class="section-header">
-            <h3>Agents</h3>
-            <button class="add-btn" @click="startAdd" :disabled="showAddForm">
-              + Add Agent
+        <section>
+          <h3>Agent</h3>
+
+          <div class="form-group">
+            <label>WebSocket URL</label>
+            <input
+              v-model="url"
+              type="text"
+              placeholder="wss://acp.example.com/v1"
+              autocapitalize="none"
+              autocorrect="off"
+              spellcheck="false"
+            />
+            <small>WebSocket endpoint (ws:// or wss://)</small>
+          </div>
+
+          <div v-if="formError" class="form-error">
+            {{ formError }}
+          </div>
+
+          <div class="form-actions">
+            <button
+              class="save-btn"
+              @click="handleSubmit"
+              :disabled="isSubmitting"
+            >
+              {{ isSubmitting ? 'Saving...' : 'Save' }}
+            </button>
+            <button class="cancel-btn" @click="emit('close')">
+              Cancel
             </button>
           </div>
-
-          <!-- Add/Edit Form -->
-          <div v-if="showAddForm || editingAgent" class="agent-form">
-            <h4>{{ editingAgent ? 'Edit Agent' : 'Add New Agent' }}</h4>
-
-            <div class="form-group">
-              <label>Name</label>
-              <input
-                v-model="formName"
-                type="text"
-                placeholder="My Agent"
-                :disabled="!!editingAgent"
-              />
-            </div>
-
-            <div class="form-group">
-              <label>URL</label>
-              <input
-                v-model="formUrl"
-                type="text"
-                placeholder="wss://acp.example.com/v1"
-              />
-              <small>
-                WebSocket endpoint (ws:// or wss://)
-              </small>
-            </div>
-
-            <div v-if="formError" class="form-error">
-              {{ formError }}
-            </div>
-
-            <div class="form-actions">
-              <button
-                class="save-btn"
-                @click="handleSubmit"
-                :disabled="isSubmitting"
-              >
-                {{ isSubmitting ? 'Saving...' : 'Save' }}
-              </button>
-              <button class="cancel-btn" @click="resetForm">
-                Cancel
-              </button>
-            </div>
-          </div>
-
-          <!-- Agent List -->
-          <div class="agents-list">
-            <div
-              v-for="agent in agents"
-              :key="agent.name"
-              class="agent-item"
-            >
-              <div class="agent-info">
-                <div class="agent-name">
-                  {{ agent.name }}
-                </div>
-                <div class="agent-command">
-                  <code>{{ agent.url }}</code>
-                </div>
-              </div>
-              <div class="agent-actions">
-                <button class="edit-btn" @click="startEdit(agent)">
-                  Edit
-                </button>
-                <button class="delete-btn" @click="handleDelete(agent.name)">
-                  Delete
-                </button>
-              </div>
-            </div>
-
-            <div v-if="agents.length === 0" class="no-agents">
-              No agents configured. Add one to get started!
-            </div>
-          </div>
         </section>
-
       </div>
     </div>
   </div>
@@ -263,47 +145,8 @@ async function handleDelete(name: string) {
   overflow-y: auto;
 }
 
-.section-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 1rem;
-}
-
-.section-header h3 {
-  margin: 0;
-}
-
-.add-btn {
-  padding: 0.375rem 0.75rem;
-  border: 1px solid var(--bg-primary);
-  background: transparent;
-  color: var(--bg-primary);
-  border-radius: 4px;
-  cursor: pointer;
-  font-size: 0.875rem;
-}
-
-.add-btn:hover:not(:disabled) {
-  background: var(--bg-primary);
-  color: white;
-}
-
-.add-btn:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-.agent-form {
-  background: var(--bg-sidebar);
-  padding: 1rem;
-  border-radius: 6px;
-  margin-bottom: 1rem;
-}
-
-.agent-form h4 {
+h3 {
   margin: 0 0 1rem 0;
-  font-size: 1rem;
 }
 
 .form-group {
@@ -380,83 +223,4 @@ async function handleDelete(name: string) {
 .cancel-btn:hover {
   background: var(--bg-hover);
 }
-
-.agents-list {
-  display: flex;
-  flex-direction: column;
-  gap: 0.5rem;
-}
-
-.agent-item {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 0.75rem;
-  background: var(--bg-sidebar);
-  border-radius: 6px;
-}
-
-.agent-info {
-  flex: 1;
-  min-width: 0;
-}
-
-.agent-name {
-  font-weight: 500;
-  margin-bottom: 0.25rem;
-}
-
-.agent-command {
-  font-size: 0.8rem;
-  color: var(--text-muted);
-}
-
-.agent-command code {
-  background: var(--bg-main);
-  padding: 0.125rem 0.375rem;
-  border-radius: 3px;
-  word-break: break-all;
-}
-
-.agent-actions {
-  display: flex;
-  gap: 0.5rem;
-  margin-left: 1rem;
-}
-
-.edit-btn,
-.delete-btn {
-  padding: 0.25rem 0.5rem;
-  border-radius: 4px;
-  font-size: 0.8rem;
-  cursor: pointer;
-}
-
-.edit-btn {
-  background: transparent;
-  border: 1px solid var(--border-color);
-  color: var(--text-secondary);
-}
-
-.edit-btn:hover {
-  background: var(--bg-hover);
-}
-
-.delete-btn {
-  background: transparent;
-  border: 1px solid var(--bg-danger);
-  color: var(--bg-danger);
-}
-
-.delete-btn:hover {
-  background: var(--bg-danger);
-  color: white;
-}
-
-.no-agents {
-  text-align: center;
-  padding: 2rem;
-  color: var(--text-muted);
-}
-
 </style>

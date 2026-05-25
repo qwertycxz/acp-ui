@@ -3,7 +3,6 @@ import type { AuthMethod } from '@agentclientprotocol/sdk';
 
 defineProps<{
   authMethods: AuthMethod[];
-  agentName: string;
 }>();
 
 const emit = defineEmits<{
@@ -22,8 +21,7 @@ const emit = defineEmits<{
 
       <div class="dialog-content">
         <p class="description">
-          <strong>{{ agentName }}</strong> requires authentication to continue.
-          Select an authentication method:
+          Select an authentication method to continue:
         </p>
 
         <div class="auth-methods">

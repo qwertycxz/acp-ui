@@ -1,16 +1,15 @@
 // Agent configuration store
 import { defineStore } from 'pinia';
 import { ref, computed } from 'vue';
-import type { AgentsConfig } from '../lib/types';
+import type { AgentConfig } from '../lib/types';
 import { getConfig } from '../lib/host';
 
 export const useConfigStore = defineStore('config', () => {
-  const config = ref<AgentsConfig>({ agents: {} });
+  const config = ref<AgentConfig>({ url: '' });
   const loading = ref(false);
   const error = ref<string | null>(null);
 
-  const agentNames = computed(() => Object.keys(config.value.agents));
-  const hasAgents = computed(() => agentNames.value.length > 0);
+  const hasAgent = computed(() => config.value.url.trim().length > 0);
 
   async function loadConfig() {
     loading.value = true;
@@ -24,11 +23,7 @@ export const useConfigStore = defineStore('config', () => {
     }
   }
 
-  function getAgent(name: string): string | undefined {
-    return config.value.agents[name];
-  }
-
-  function updateFromEvent(newConfig: AgentsConfig) {
+  function updateFromEvent(newConfig: AgentConfig) {
     config.value = newConfig;
   }
 
@@ -36,10 +31,8 @@ export const useConfigStore = defineStore('config', () => {
     config,
     loading,
     error,
-    agentNames,
-    hasAgents,
+    hasAgent,
     loadConfig,
-    getAgent,
     updateFromEvent,
   };
 });

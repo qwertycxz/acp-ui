@@ -51,7 +51,6 @@ export class AcpClientBridge implements Client {
   public pendingPermissionRequest: LocalPermissionRequest | null = null;
   private permissionResolver: PermissionResolver | null = null;
   public pendingAuthMethods: AuthMethod[] = [];
-  public pendingAuthAgentName = '';
   private authMethodResolver: AuthMethodResolver | null = null;
 
   public messages: ChatMessage[] = [];
@@ -529,13 +528,11 @@ export class AcpClientBridge implements Client {
   private clearAuthPrompt(): void {
     this.authMethodResolver = null;
     this.pendingAuthMethods = [];
-    this.pendingAuthAgentName = '';
   }
 
   async retryWithAuth<T>(
     error: unknown,
     authMethods: AuthMethod[],
-    agentName: string,
     retry: () => Promise<T>
   ): Promise<T> {
     const message = error instanceof Error ? error.message : String(error);
@@ -547,7 +544,6 @@ export class AcpClientBridge implements Client {
 
     const selectedMethodId = await new Promise<string | null>((resolve) => {
       this.pendingAuthMethods = authMethods;
-      this.pendingAuthAgentName = agentName;
       this.authMethodResolver = resolve;
     });
     this.assertNotAborted();
@@ -561,11 +557,7 @@ export class AcpClientBridge implements Client {
     return retry();
   }
 
-  async startNewSession(
-    agentName: string,
-    cwd: string,
-    appVersion: string
-  ): Promise<void> {
+  async startNewSession(cwd: string, appVersion: string): Promise<void> {
     this.isLoading = true;
     this.isConnecting = true;
     this.connectionAborted = false;
@@ -605,7 +597,6 @@ export class AcpClientBridge implements Client {
         this.retryWithAuth(
           error,
           authMethods,
-          agentName,
           () => this.newSession({ cwd, mcpServers: [] })
         )
       );
@@ -635,7 +626,6 @@ export class AcpClientBridge implements Client {
       }
       const session = {
         id: crypto.randomUUID(),
-        agentName,
         sessionId: sessionResponse.sessionId,
         title: `Session ${new Date().toLocaleString()}`,
         lastUpdated: Date.now(),
@@ -693,7 +683,6 @@ export class AcpClientBridge implements Client {
         this.retryWithAuth(
           error,
           authMethods,
-          savedSession.agentName,
           () =>
             this.loadSession({
               sessionId: savedSession.sessionId,

@@ -2,7 +2,6 @@
 import { computed } from 'vue';
 
 const props = defineProps<{
-  agentName: string;
   phase: string;
   logs: string[];
   elapsedSeconds: number;
@@ -53,7 +52,7 @@ const isLongWait = computed(() => props.elapsedSeconds > 10);
 <template>
   <div class="startup-progress">
     <div class="progress-header">
-      <span class="agent-name">Connecting to {{ agentName }}...</span>
+      <span class="connection-label">Connecting...</span>
       <span class="elapsed-time">{{ formattedTime }}</span>
     </div>
 
@@ -115,7 +114,7 @@ const isLongWait = computed(() => props.elapsedSeconds > 10);
   margin-bottom: 0.75rem;
 }
 
-.agent-name {
+.connection-label {
   font-weight: 600;
   color: var(--text-primary);
 }

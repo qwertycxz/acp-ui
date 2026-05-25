@@ -1,6 +1,6 @@
 # ACP UI
 
-A browser client for the [Agent Client Protocol (ACP)](https://agentclientprotocol.com/). It connects to remote ACP-compatible agents over WebSocket and provides chat, sessions, permissions, model/mode selection, authentication prompts, and a traffic monitor.
+A browser client for the [Agent Client Protocol (ACP)](https://agentclientprotocol.com/). It connects to a remote ACP-compatible agent over WebSocket and provides chat, sessions, permissions, model/mode selection, authentication prompts, and a traffic monitor.
 
 ![ACP UI Screenshot](assets/screenshot.png)
 
@@ -12,7 +12,7 @@ Pages served over HTTPS can only open `wss://` URLs due to browser mixed-content
 
 ## Features
 
-- Remote ACP agents over `ws://` / `wss://`
+- A remote ACP agent over `ws://` / `wss://`
 - Browser persistence with `localStorage`
 - Session creation, resume, and management
 - Markdown chat rendering and tool call visualization
@@ -24,29 +24,27 @@ Pages served over HTTPS can only open `wss://` URLs due to browser mixed-content
 
 ## Configuration
 
-Agent configuration is stored in browser `localStorage` under the key `acp-ui:agents` and is managed through the Settings dialog.
+Agent configuration is stored in browser `localStorage` under the key `acp-ui:agent` and is managed through the Settings dialog.
 
 Example remote agent:
 
 ```json
 {
-  "agents": {
-    "Copilot CLI (remote)": "wss://acp.example.com/v1"
-  }
+  "url": "wss://acp.example.com/v1"
 }
 ```
 
-Filesystem RPCs (`fs/read_text_file`, `fs/write_text_file`) are not available in the browser app. The client advertises those capabilities as `false`, and any incoming `fs/*` request is rejected with JSON-RPC `-32601 Method not found`. For remote agents, the working directory path is interpreted on the agent host.
+Filesystem RPCs (`fs/read_text_file`, `fs/write_text_file`) are not available in the browser app. The client advertises those capabilities as `false`, and any incoming `fs/*` request is rejected with JSON-RPC `-32601 Method not found`. For a remote agent, the working directory path is interpreted on the agent host.
 
 ## Expose A Local Agent
 
-The browser cannot spawn local stdio agents directly. Use a bridge such as [`@rebornix/stdio-to-ws`](https://www.npmjs.com/package/@rebornix/stdio-to-ws):
+The browser cannot spawn a local stdio agent directly. Use a bridge such as [`@rebornix/stdio-to-ws`](https://www.npmjs.com/package/@rebornix/stdio-to-ws):
 
 ```sh
 npx @rebornix/stdio-to-ws "copilot --acp" --port 3000 --persist --grace-period -1
 ```
 
-Then add a WebSocket agent in ACP UI with a URL such as `ws://localhost:3000/` when running locally, or `wss://...` when using the hosted HTTPS app.
+Then set the WebSocket URL in ACP UI to `ws://localhost:3000/` when running locally, or `wss://...` when using the hosted HTTPS app.
 
 For public access, pair the bridge with [Microsoft Dev Tunnels](https://learn.microsoft.com/en-us/azure/developer/dev-tunnels/):
 

@@ -3,7 +3,6 @@ import { ref, computed, reactive, onMounted, onBeforeUnmount } from 'vue';
 import { loadKvStore, type KVStore } from './lib/host';
 import { useConfigStore } from './stores/config';
 import { AcpClientBridge } from './lib/acp-bridge';
-import AgentSelector from './components/AgentSelector.vue';
 import SessionList from './components/SessionList.vue';
 import ChatView from './components/ChatView.vue';
 import PermissionDialog from './components/PermissionDialog.vue';
@@ -27,7 +26,6 @@ type AcpClient = Pick<
   AcpClientBridge,
   | 'pendingPermissionRequest'
   | 'pendingAuthMethods'
-  | 'pendingAuthAgentName'
   | 'messages'
   | 'availableModes'
   | 'currentModeId'
@@ -66,7 +64,6 @@ const configStore = useConfigStore();
 const appVersion =
   (import.meta.env as Record<string, string | undefined>).VITE_APP_VERSION ?? '0.0.0-web';
 
-const selectedAgent = ref('');
 const selectedCwd = ref('');
 const showSidebar = ref(true);
 const showSettings = ref(false);
@@ -120,13 +117,12 @@ const startupPhase = computed(() => acpClient.value?.startupPhase ?? 'starting')
 const startupLogs = computed(() => acpClient.value?.startupLogs ?? []);
 const startupElapsed = computed(() => acpClient.value?.startupElapsed ?? 0);
 const error = computed(() => sessionError.value || configStore.error);
-const hasAgents = computed(() => configStore.hasAgents);
+const hasAgent = computed(() => configStore.hasAgent);
 const messages = computed<ChatMessage[]>(() => acpClient.value?.messages ?? []);
 const pendingPermission = computed<PermissionRequest | null>(
   () => acpClient.value?.pendingPermissionRequest ?? null
 );
 const pendingAuthMethods = computed<AuthMethod[]>(() => acpClient.value?.pendingAuthMethods ?? []);
-const pendingAuthAgentName = computed(() => acpClient.value?.pendingAuthAgentName ?? '');
 const availableModes = computed<SessionMode[]>(() => acpClient.value?.availableModes ?? []);
 const currentModeId = computed(() => acpClient.value?.currentModeId ?? '');
 const availableCommands = computed<SlashCommand[]>(() => acpClient.value?.availableCommands ?? []);
@@ -141,12 +137,6 @@ const trafficFilter = computed<TrafficFilter>(() => acpClient.value?.trafficFilt
 const trafficSearchQuery = computed(() => acpClient.value?.trafficSearchQuery ?? '');
 const resumableSessions = computed(() =>
   savedSessions.value.filter(s => s.supportsLoadSession === true)
-);
-
-// Name of the agent the reconnect banner refers to. Falls back to the
-// generic "agent" if the saved session has no name (shouldn't happen).
-const reconnectingAgentName = computed(
-  () => currentSession.value?.agentName ?? 'agent'
 );
 
 // True when there is a saved session we *could* reconnect to but the
@@ -204,10 +194,10 @@ async function saveSessionsToStore() {
   }
 }
 
-async function createClient(agentName: string): Promise<AcpClient> {
-  const url = configStore.getAgent(agentName);
+async function createClient(): Promise<AcpClient> {
+  const url = configStore.config.url.trim();
   if (!url) {
-    throw new Error(`Agent '${agentName}' not found in config`);
+    throw new Error('Agent WebSocket URL is not configured');
   }
   if (acpClient.value) {
     await acpClient.value.disconnect();
@@ -229,20 +219,18 @@ async function handleCwdInput(event: Event) {
 }
 
 async function handleNewSession() {
-  if (!selectedAgent.value) return;
-  const url = configStore.getAgent(selectedAgent.value);
-  if (!url) {
-    configStore.error = `Agent '${selectedAgent.value}' is missing a WebSocket URL`;
+  if (!configStore.config.url.trim()) {
+    configStore.error = 'Agent WebSocket URL is not configured';
     return;
   }
 
   // ACP requires an absolute working directory; passing '.' is rejected by
-  // most agents. On desktop the folder picker always returns an absolute
+  // the agent may reject relative paths. On desktop the folder picker always returns an absolute
   // path, but on mobile the user types it, so validate up-front and surface
   // a helpful error rather than letting the agent reject `session/new`.
   const cwd = selectedCwd.value.trim();
   if (!cwd) {
-    await createClient(selectedAgent.value);
+    await createClient();
     if (acpClient.value) {
       acpClient.value.sessionError = 'Please enter a working directory (absolute path on the agent\u2019s machine).';
     }
@@ -250,7 +238,7 @@ async function handleNewSession() {
   }
   const isAbsolute = cwd.startsWith('/') || /^[A-Za-z]:[\\/]/.test(cwd);
   if (!isAbsolute) {
-    await createClient(selectedAgent.value);
+    await createClient();
     if (acpClient.value) {
       acpClient.value.sessionError = `Working directory must be an absolute path (got: ${cwd}).`;
     }
@@ -258,8 +246,8 @@ async function handleNewSession() {
   }
 
   try {
-    const client = await createClient(selectedAgent.value);
-    await client.startNewSession(selectedAgent.value, cwd, appVersion);
+    const client = await createClient();
+    await client.startNewSession(cwd, appVersion);
     if (client.currentSession) {
       savedSessions.value.push(client.currentSession);
     }
@@ -277,9 +265,8 @@ async function handleNewSession() {
 }
 
 async function handleResumeSession(session: SavedSession) {
-  selectedAgent.value = session.agentName;
   try {
-    const client = await createClient(session.agentName);
+    const client = await createClient();
     await client.loadSavedSession(session, appVersion);
     await saveSessionsToStore();
   } catch (e) {
@@ -382,10 +369,8 @@ async function tryReconnect(): Promise<boolean> {
   }
 
   try {
-    const url = configStore.getAgent(session.agentName);
-    if (!url) {
-      throw new Error(`Agent '${session.agentName}' not found in config`);
-    }
+    const url = configStore.config.url.trim();
+    if (!url) throw new Error('Agent WebSocket URL is not configured');
     const client = reactive(new AcpClientBridge(url));
     client.currentSession = session;
     acpClient.value = client;
@@ -422,12 +407,8 @@ async function tryReconnect(): Promise<boolean> {
       </div>
 
       <div class="sidebar-content">
-        <!-- Agent Selection -->
+        <!-- Session setup -->
         <div class="section">
-          <AgentSelector
-            v-model:selected="selectedAgent"
-          />
-
           <!-- Working Directory Picker -->
           <div class="cwd-picker">
             <label>Working Directory:</label>
@@ -445,9 +426,9 @@ async function tryReconnect(): Promise<boolean> {
           </div>
 
           <button
-            v-if="hasAgents && !isConnected && !isConnecting"
+            v-if="hasAgent && !isConnected && !isConnecting"
             class="new-session-btn"
-            :disabled="!selectedAgent || isLoading"
+            :disabled="isLoading"
             @click="handleNewSession"
           >
             {{ isLoading ? 'Connecting...' : 'New Session' }}
@@ -456,7 +437,6 @@ async function tryReconnect(): Promise<boolean> {
           <!-- Startup Progress -->
           <StartupProgress
             v-if="isConnecting"
-            :agent-name="selectedAgent"
             :phase="startupPhase"
             :logs="startupLogs"
             :elapsed-seconds="startupElapsed"
@@ -521,7 +501,7 @@ async function tryReconnect(): Promise<boolean> {
         <div v-if="isReconnecting" class="reconnect-banner">
           <span class="reconnect-spinner" aria-hidden="true"></span>
           <span class="reconnect-text">
-            Reconnecting to <strong>{{ reconnectingAgentName }}</strong>…
+            Reconnecting...
           </span>
         </div>
 
@@ -566,9 +546,9 @@ async function tryReconnect(): Promise<boolean> {
         <!-- Welcome screen when not connected -->
         <div v-else class="welcome-screen">
           <h2>Welcome to ACP UI</h2>
-          <p>Select an agent and create a new session to get started.</p>
-          <p v-if="!hasAgents" class="hint">
-            Configure agents in your config file to begin.
+          <p>Enter a working directory and create a new session to get started.</p>
+          <p v-if="!hasAgent" class="hint">
+            Configure the agent WebSocket URL in Settings to begin.
           </p>
         </div>
       </main>
@@ -603,7 +583,6 @@ async function tryReconnect(): Promise<boolean> {
     <AuthMethodDialog
       v-if="pendingAuthMethods.length > 0"
       :auth-methods="pendingAuthMethods"
-      :agent-name="pendingAuthAgentName"
       @select="(methodId) => acpClient?.selectAuthMethod(methodId)"
       @cancel="acpClient?.cancelAuthSelection()"
     />

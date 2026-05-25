@@ -1,12 +1,11 @@
 // Types for ACP UI application
 
-export interface AgentsConfig {
-  agents: Record<string, string>;
+export interface AgentConfig {
+  url: string;
 }
 
 export interface SavedSession {
   id: string;
-  agentName: string;
   sessionId: string;
   title: string;
   lastUpdated: number;
