@@ -68,3 +68,18 @@ export interface ModelInfo {
   name: string;
   description?: string;
 }
+
+export type TrafficDirection = 'in' | 'out';
+export type TrafficType = 'request' | 'response' | 'notification';
+export type TrafficFilter = 'all' | 'requests' | 'responses' | 'notifications';
+
+export interface TrafficEntry {
+  id: string;
+  timestamp: number;
+  direction: TrafficDirection;
+  type: TrafficType;
+  method: string;
+  requestId?: number | string;
+  payload: unknown;
+  error?: boolean;
+}

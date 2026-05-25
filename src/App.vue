@@ -12,7 +12,16 @@ import AuthMethodDialog from './components/AuthMethodDialog.vue';
 import TrafficMonitor from './components/TrafficMonitor.vue';
 import StartupProgress from './components/StartupProgress.vue';
 import type { AuthMethod } from '@agentclientprotocol/sdk';
-import type { ChatMessage, ModelInfo, PermissionRequest, SavedSession, SessionMode, SlashCommand } from './lib/types';
+import type {
+  ChatMessage,
+  ModelInfo,
+  PermissionRequest,
+  SavedSession,
+  SessionMode,
+  SlashCommand,
+  TrafficEntry,
+  TrafficFilter,
+} from './lib/types';
 
 type AcpClient = Pick<
   AcpClientBridge,
@@ -34,6 +43,11 @@ type AcpClient = Pick<
   | 'startupPhase'
   | 'startupLogs'
   | 'startupElapsed'
+  | 'trafficEntries'
+  | 'filteredTrafficEntries'
+  | 'isTrafficPaused'
+  | 'trafficFilter'
+  | 'trafficSearchQuery'
   | 'disconnect'
   | 'startNewSession'
   | 'loadSavedSession'
@@ -49,6 +63,11 @@ type AcpClient = Pick<
   | 'cancelPermission'
   | 'selectAuthMethod'
   | 'cancelAuthSelection'
+  | 'clearTraffic'
+  | 'toggleTrafficPause'
+  | 'setTrafficFilter'
+  | 'setTrafficSearch'
+  | 'clearTrafficSearch'
 >;
 
 const configStore = useConfigStore();
@@ -121,6 +140,13 @@ const currentModeId = computed(() => acpClient.value?.currentModeId ?? '');
 const availableCommands = computed<SlashCommand[]>(() => acpClient.value?.availableCommands ?? []);
 const availableModels = computed<ModelInfo[]>(() => acpClient.value?.availableModels ?? []);
 const currentModelId = computed(() => acpClient.value?.currentModelId ?? '');
+const trafficEntries = computed<TrafficEntry[]>(() => acpClient.value?.trafficEntries ?? []);
+const filteredTrafficEntries = computed<TrafficEntry[]>(
+  () => acpClient.value?.filteredTrafficEntries ?? []
+);
+const isTrafficPaused = computed(() => acpClient.value?.isTrafficPaused ?? false);
+const trafficFilter = computed<TrafficFilter>(() => acpClient.value?.trafficFilter ?? 'all');
+const trafficSearchQuery = computed(() => acpClient.value?.trafficSearchQuery ?? '');
 const resumableSessions = computed(() =>
   savedSessions.value.filter(s => s.supportsLoadSession === true)
 );
@@ -366,6 +392,26 @@ async function handleModelChange(modelId: string) {
   }
 }
 
+function handleTrafficTogglePause() {
+  acpClient.value?.toggleTrafficPause();
+}
+
+function handleTrafficClear() {
+  acpClient.value?.clearTraffic();
+}
+
+function handleTrafficSearch(query: string) {
+  acpClient.value?.setTrafficSearch(query);
+}
+
+function handleTrafficClearSearch() {
+  acpClient.value?.clearTrafficSearch();
+}
+
+function handleTrafficFilterChange(filter: TrafficFilter) {
+  acpClient.value?.setTrafficFilter(filter);
+}
+
 function toggleSidebar() {
   showSidebar.value = !showSidebar.value;
 }
@@ -594,7 +640,19 @@ async function tryReconnect(): Promise<boolean> {
 
       <!-- Traffic Monitor Panel -->
       <div v-if="showTrafficMonitor" class="traffic-panel">
-        <TrafficMonitor @close="showTrafficMonitor = false" />
+        <TrafficMonitor
+          :entries="trafficEntries"
+          :filtered-entries="filteredTrafficEntries"
+          :is-paused="isTrafficPaused"
+          :filter="trafficFilter"
+          :search-query="trafficSearchQuery"
+          @toggle-pause="handleTrafficTogglePause"
+          @clear="handleTrafficClear"
+          @search="handleTrafficSearch"
+          @clear-search="handleTrafficClearSearch"
+          @filter-change="handleTrafficFilterChange"
+          @close="showTrafficMonitor = false"
+        />
       </div>
     </div>
 

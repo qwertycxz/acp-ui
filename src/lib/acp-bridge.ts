@@ -26,23 +26,17 @@ import type {
   SessionMode,
   SlashCommand,
   ToolCallInfo,
+  TrafficEntry,
+  TrafficFilter,
 } from './types';
 import { markRaw } from 'vue';
-import { useTrafficStore } from '../stores/traffic';
 
 type PermissionResolver = (response: RequestPermissionResponse) => void;
 type AuthMethodResolver = (methodId: string | null) => void;
 
-let trafficStore: ReturnType<typeof useTrafficStore> | null = null;
-function getTrafficStore() {
-  if (!trafficStore) {
-    trafficStore = useTrafficStore();
-  }
-  return trafficStore;
-}
-
 const JSONRPC_METHOD_NOT_FOUND = -32601;
 const PROTOCOL_VERSION = 1;
+const MAX_TRAFFIC_ENTRIES = 500;
 
 export class AcpClientBridge implements Client {
   private socket: WebSocket | null = null;
@@ -79,6 +73,10 @@ export class AcpClientBridge implements Client {
   public startupPhase = 'starting';
   public startupLogs: string[] = [];
   public startupElapsed = 0;
+  public trafficEntries: TrafficEntry[] = [];
+  public isTrafficPaused = false;
+  public trafficFilter: TrafficFilter = 'all';
+  public trafficSearchQuery = '';
 
   constructor(url: string) {
     this.url = url;
@@ -86,6 +84,67 @@ export class AcpClientBridge implements Client {
 
   public get isConnected(): boolean {
     return this.socketReadyState === WebSocket.OPEN && this.currentSession !== null;
+  }
+
+  public get filteredTrafficEntries(): TrafficEntry[] {
+    let result = this.trafficEntries;
+
+    switch (this.trafficFilter) {
+      case 'requests':
+        result = result.filter((entry) => entry.type === 'request');
+        break;
+      case 'responses':
+        result = result.filter((entry) => entry.type === 'response');
+        break;
+      case 'notifications':
+        result = result.filter((entry) => entry.type === 'notification');
+        break;
+    }
+
+    const query = this.trafficSearchQuery.trim().toLowerCase();
+    if (query) {
+      result = result.filter(
+        (entry) =>
+          entry.method.toLowerCase().includes(query) ||
+          JSON.stringify(entry.payload).toLowerCase().includes(query)
+      );
+    }
+
+    return result;
+  }
+
+  private addTrafficEntry(entry: Omit<TrafficEntry, 'id' | 'timestamp'>): void {
+    if (this.isTrafficPaused) return;
+
+    this.trafficEntries.push({
+      ...entry,
+      id: crypto.randomUUID(),
+      timestamp: Date.now(),
+    });
+
+    if (this.trafficEntries.length > MAX_TRAFFIC_ENTRIES) {
+      this.trafficEntries = this.trafficEntries.slice(-MAX_TRAFFIC_ENTRIES);
+    }
+  }
+
+  clearTraffic(): void {
+    this.trafficEntries = [];
+  }
+
+  toggleTrafficPause(): void {
+    this.isTrafficPaused = !this.isTrafficPaused;
+  }
+
+  setTrafficFilter(filter: TrafficFilter): void {
+    this.trafficFilter = filter;
+  }
+
+  setTrafficSearch(query: string): void {
+    this.trafficSearchQuery = query;
+  }
+
+  clearTrafficSearch(): void {
+    this.trafficSearchQuery = '';
   }
 
   async connect(): Promise<void> {
@@ -205,10 +264,9 @@ export class AcpClientBridge implements Client {
   private handleMessage(message: string): void {
     try {
       const parsed = JSON.parse(message);
-      const store = getTrafficStore();
 
       if ('id' in parsed && parsed.id !== undefined && !('method' in parsed)) {
-        store.addEntry({
+        this.addTrafficEntry({
           direction: 'in',
           type: 'response',
           method: this.pendingMethods.get(parsed.id) || 'unknown',
@@ -233,7 +291,7 @@ export class AcpClientBridge implements Client {
       }
 
       if ('id' in parsed && parsed.id !== undefined && 'method' in parsed) {
-        store.addEntry({
+        this.addTrafficEntry({
           direction: 'in',
           type: 'request',
           method: parsed.method,
@@ -244,7 +302,7 @@ export class AcpClientBridge implements Client {
       }
 
       if (!('id' in parsed) && parsed.method) {
-        store.addEntry({
+        this.addTrafficEntry({
           direction: 'in',
           type: 'notification',
           method: parsed.method,
@@ -283,7 +341,7 @@ export class AcpClientBridge implements Client {
       ? { jsonrpc: '2.0', id, error }
       : { jsonrpc: '2.0', id, result };
 
-    getTrafficStore().addEntry({
+    this.addTrafficEntry({
       direction: 'out',
       type: 'response',
       method,
@@ -426,7 +484,7 @@ export class AcpClientBridge implements Client {
       params: params || {},
     };
 
-    getTrafficStore().addEntry({
+    this.addTrafficEntry({
       direction: 'out',
       type: 'request',
       method,
@@ -461,7 +519,7 @@ export class AcpClientBridge implements Client {
       params: params || {},
     };
 
-    getTrafficStore().addEntry({
+    this.addTrafficEntry({
       direction: 'out',
       type: 'notification',
       method,

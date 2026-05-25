@@ -1,18 +1,28 @@
 <script setup lang="ts">
-import { ref, watch, nextTick, onUnmounted } from 'vue';
-import { useTrafficStore, type TrafficEntry } from '../stores/traffic';
+import { nextTick, onUnmounted, ref, watch } from 'vue';
+import type { TrafficEntry, TrafficFilter } from '../lib/types';
+
+const props = defineProps<{
+  entries: TrafficEntry[];
+  filteredEntries: TrafficEntry[];
+  isPaused: boolean;
+  filter: TrafficFilter;
+  searchQuery: string;
+}>();
 
 const emit = defineEmits<{
   close: [];
   resize: [height: number];
+  togglePause: [];
+  clear: [];
+  search: [query: string];
+  clearSearch: [];
+  filterChange: [filter: TrafficFilter];
 }>();
 
-const trafficStore = useTrafficStore();
 const expandedIds = ref<Set<string>>(new Set());
 const logContainer = ref<HTMLElement | null>(null);
 const autoScroll = ref(true);
-
-// Resize handling
 const isResizing = ref(false);
 const panelHeight = ref(220);
 const MIN_HEIGHT = 100;
@@ -49,12 +59,16 @@ onUnmounted(() => {
 
 function formatTime(timestamp: number): string {
   const date = new Date(timestamp);
-  return date.toLocaleTimeString('en-US', {
-    hour12: false,
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-  }) + '.' + String(date.getMilliseconds()).padStart(3, '0');
+  return (
+    date.toLocaleTimeString('en-US', {
+      hour12: false,
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+    }) +
+    '.' +
+    String(date.getMilliseconds()).padStart(3, '0')
+  );
 }
 
 function toggleExpand(id: string) {
@@ -63,7 +77,6 @@ function toggleExpand(id: string) {
   } else {
     expandedIds.value.add(id);
   }
-  // Force reactivity
   expandedIds.value = new Set(expandedIds.value);
 }
 
@@ -82,95 +95,88 @@ function getEntryClass(entry: TrafficEntry): string {
 }
 
 function getDirectionIcon(entry: TrafficEntry): string {
-  return entry.direction === 'out' ? '→' : '←';
+  return entry.direction === 'out' ? '->' : '<-';
 }
 
 function getTypeLabel(entry: TrafficEntry): string {
-  if (entry.type === 'notification') {
-    return '(notification)';
-  } else if (entry.type === 'response') {
-    return '(response)';
-  }
+  if (entry.type === 'notification') return '(notification)';
+  if (entry.type === 'response') return '(response)';
   return '';
 }
 
-// Auto-scroll when new entries arrive
-watch(() => trafficStore.entries.length, async () => {
-  if (autoScroll.value && logContainer.value && !trafficStore.isPaused) {
-    await nextTick();
-    logContainer.value.scrollTop = logContainer.value.scrollHeight;
+watch(
+  () => props.entries.length,
+  async () => {
+    if (autoScroll.value && logContainer.value && !props.isPaused) {
+      await nextTick();
+      logContainer.value.scrollTop = logContainer.value.scrollHeight;
+    }
   }
-});
+);
 
 function handleScroll() {
   if (!logContainer.value) return;
   const { scrollTop, scrollHeight, clientHeight } = logContainer.value;
-  // Disable auto-scroll if user scrolled up
   autoScroll.value = scrollTop + clientHeight >= scrollHeight - 50;
 }
 
 function handleCopy(entry: TrafficEntry) {
-  navigator.clipboard.writeText(formatJson(entry.payload));
+  void navigator.clipboard.writeText(formatJson(entry.payload));
 }
 </script>
 
 <template>
   <div class="traffic-monitor" :style="{ height: panelHeight + 'px' }">
-    <!-- Resize Handle -->
     <div
       class="resize-handle"
-      @mousedown="startResize"
       title="Drag to resize"
+      @mousedown="startResize"
     ></div>
 
     <div class="monitor-header">
-      <span class="title">📡 ACP Traffic</span>
+      <span class="title">ACP Traffic</span>
 
       <div class="controls">
         <button
           class="control-btn"
-          :class="{ active: trafficStore.isPaused }"
-          @click="trafficStore.togglePause()"
-          :title="trafficStore.isPaused ? 'Resume' : 'Pause'"
+          :class="{ active: isPaused }"
+          :title="isPaused ? 'Resume' : 'Pause'"
+          @click="emit('togglePause')"
         >
-          {{ trafficStore.isPaused ? '▶' : '⏸' }}
+          {{ isPaused ? 'Resume' : 'Pause' }}
         </button>
 
-        <button
-          class="control-btn"
-          @click="trafficStore.clear()"
-          title="Clear"
-        >
-          🗑
+        <button class="control-btn" title="Clear" @click="emit('clear')">
+          Clear
         </button>
 
         <div class="search-container">
-          <span class="search-icon">🔍</span>
+          <span class="search-icon">Search</span>
           <input
             type="text"
             class="search-input"
             placeholder="Search..."
-            :value="trafficStore.searchQuery"
-            @input="trafficStore.setSearch(($event.target as HTMLInputElement).value)"
+            :value="searchQuery"
+            @input="emit('search', ($event.target as HTMLInputElement).value)"
           />
           <button
-            v-if="trafficStore.searchQuery"
+            v-if="searchQuery"
             class="search-clear-btn"
-            @click="trafficStore.clearSearch()"
             title="Clear search"
+            @click="emit('clearSearch')"
           >
-            ×
+            x
           </button>
         </div>
 
-        <span v-if="trafficStore.searchQuery" class="match-count">
-          {{ trafficStore.filteredEntries.length }} match{{ trafficStore.filteredEntries.length === 1 ? '' : 'es' }}
+        <span v-if="searchQuery" class="match-count">
+          {{ filteredEntries.length }} match{{ filteredEntries.length === 1 ? '' : 'es' }}
         </span>
 
         <select
           class="filter-select"
-          :value="trafficStore.filter"
-          @change="trafficStore.setFilter(($event.target as HTMLSelectElement).value as any)"
+          :value="filter"
+          @change="emit('filterChange', ($event.target as HTMLSelectElement).value as TrafficFilter)"
         >
           <option value="all">All</option>
           <option value="requests">Requests</option>
@@ -179,36 +185,28 @@ function handleCopy(entry: TrafficEntry) {
         </select>
       </div>
 
-      <button class="close-btn" @click="emit('close')" title="Close">×</button>
+      <button class="close-btn" title="Close" @click="emit('close')">x</button>
     </div>
 
-    <div
-      class="log-container"
-      ref="logContainer"
-      @scroll="handleScroll"
-    >
-      <div v-if="trafficStore.filteredEntries.length === 0" class="empty-state">
+    <div ref="logContainer" class="log-container" @scroll="handleScroll">
+      <div v-if="filteredEntries.length === 0" class="empty-state">
         No traffic captured yet. Connect to an agent to see ACP messages.
       </div>
 
       <div
-        v-for="entry in trafficStore.filteredEntries"
+        v-for="entry in filteredEntries"
         :key="entry.id"
         :class="getEntryClass(entry)"
       >
         <div class="entry-header" @click="toggleExpand(entry.id)">
-          <span class="expand-icon">{{ expandedIds.has(entry.id) ? '▾' : '▸' }}</span>
+          <span class="expand-icon">{{ expandedIds.has(entry.id) ? 'v' : '>' }}</span>
           <span class="timestamp">{{ formatTime(entry.timestamp) }}</span>
           <span class="direction-icon">{{ getDirectionIcon(entry) }}</span>
           <span class="method">{{ entry.method }}</span>
           <span class="type-label">{{ getTypeLabel(entry) }}</span>
           <span v-if="entry.requestId !== undefined" class="request-id">#{{ entry.requestId }}</span>
-          <button
-            class="copy-btn"
-            @click.stop="handleCopy(entry)"
-            title="Copy JSON"
-          >
-            📋
+          <button class="copy-btn" title="Copy JSON" @click.stop="handleCopy(entry)">
+            Copy
           </button>
         </div>
 
@@ -218,9 +216,7 @@ function handleCopy(entry: TrafficEntry) {
       </div>
     </div>
 
-    <div v-if="trafficStore.isPaused" class="paused-indicator">
-      ⏸ Paused
-    </div>
+    <div v-if="isPaused" class="paused-indicator">Paused</div>
   </div>
 </template>
 
@@ -276,6 +272,7 @@ function handleCopy(entry: TrafficEntry) {
   border: 1px solid var(--border-color);
   border-radius: 4px;
   background: transparent;
+  color: var(--text-primary);
   cursor: pointer;
   font-size: 0.75rem;
 }
@@ -363,7 +360,7 @@ function handleCopy(entry: TrafficEntry) {
 .log-container {
   flex: 1;
   overflow-y: auto;
-  font-family: 'Monaco', 'Menlo', 'Consolas', monospace;
+  font-family: Monaco, Menlo, Consolas, monospace;
 }
 
 .empty-state {
@@ -400,7 +397,7 @@ function handleCopy(entry: TrafficEntry) {
 
 .direction-icon {
   font-weight: bold;
-  width: 1em;
+  width: 1.5em;
 }
 
 .entry.out .direction-icon {
@@ -451,6 +448,7 @@ function handleCopy(entry: TrafficEntry) {
   padding: 0.125rem 0.25rem;
   border: none;
   background: transparent;
+  color: var(--text-primary);
   cursor: pointer;
   font-size: 0.7rem;
   opacity: 0;
