@@ -32,14 +32,6 @@ export const useConfigStore = defineStore('config', () => {
     config.value = newConfig;
   }
 
-  function clearError() {
-    error.value = null;
-  }
-
-  function setError(message: string) {
-    error.value = message;
-  }
-
   return {
     config,
     loading,
@@ -49,7 +41,5 @@ export const useConfigStore = defineStore('config', () => {
     loadConfig,
     getAgent,
     updateFromEvent,
-    clearError,
-    setError,
   };
 });

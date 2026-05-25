@@ -61,12 +61,7 @@ function handleKeyDown(event: KeyboardEvent) {
   }
 }
 
-// Expose keyboard handler for parent to call
 defineExpose({ handleKeyDown });
-
-function selectCommand(cmd: SlashCommand) {
-  emit('select', cmd);
-}
 </script>
 
 <template>
@@ -80,7 +75,7 @@ function selectCommand(cmd: SlashCommand) {
         v-for="(cmd, index) in filteredCommands"
         :key="cmd.name"
         :class="['command-item', { selected: index === selectedIndex }]"
-        @click="selectCommand(cmd)"
+        @click="emit('select', cmd)"
         @mouseenter="selectedIndex = index"
       >
         <div class="command-row">

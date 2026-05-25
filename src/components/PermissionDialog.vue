@@ -9,14 +9,6 @@ const emit = defineEmits<{
   select: [optionId: string];
   cancel: [];
 }>();
-
-function handleSelect(optionId: string) {
-  emit('select', optionId);
-}
-
-function handleCancel() {
-  emit('cancel');
-}
 </script>
 
 <template>
@@ -49,11 +41,11 @@ function handleCancel() {
           v-for="option in request.options"
           :key="option.optionId"
           :class="['option-btn', `option-${option.kind}`]"
-          @click="handleSelect(option.optionId)"
+          @click="emit('select', option.optionId)"
         >
           {{ option.name }}
         </button>
-        <button class="cancel-btn" @click="handleCancel">
+        <button class="cancel-btn" @click="emit('cancel')">
           Cancel
         </button>
       </div>

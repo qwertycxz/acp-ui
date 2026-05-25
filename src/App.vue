@@ -56,18 +56,10 @@ type AcpClient = Pick<
   | 'setSessionMode'
   | 'setSessionModel'
   | 'cancelConnection'
-  | 'clearError'
-  | 'setError'
-  | 'setCurrentSession'
   | 'resolvePermission'
   | 'cancelPermission'
   | 'selectAuthMethod'
   | 'cancelAuthSelection'
-  | 'clearTraffic'
-  | 'toggleTrafficPause'
-  | 'setTrafficFilter'
-  | 'setTrafficSearch'
-  | 'clearTrafficSearch'
 >;
 
 const configStore = useConfigStore();
@@ -169,10 +161,6 @@ const canManuallyReconnect = computed(
     !!currentSession.value?.supportsLoadSession
 );
 
-async function handleManualReconnect() {
-  await tryReconnect();
-}
-
 onMounted(async () => {
   // Track viewport width so the sidebar can default-collapse into a drawer
   // on phones / narrow windows. We watch a MediaQueryList rather than
@@ -244,7 +232,7 @@ async function handleNewSession() {
   if (!selectedAgent.value) return;
   const url = configStore.getAgent(selectedAgent.value);
   if (!url) {
-    configStore.setError(`Agent '${selectedAgent.value}' is missing a WebSocket URL`);
+    configStore.error = `Agent '${selectedAgent.value}' is missing a WebSocket URL`;
     return;
   }
 
@@ -255,13 +243,17 @@ async function handleNewSession() {
   const cwd = selectedCwd.value.trim();
   if (!cwd) {
     await createClient(selectedAgent.value);
-    acpClient.value?.setError('Please enter a working directory (absolute path on the agent\u2019s machine).');
+    if (acpClient.value) {
+      acpClient.value.sessionError = 'Please enter a working directory (absolute path on the agent\u2019s machine).';
+    }
     return;
   }
   const isAbsolute = cwd.startsWith('/') || /^[A-Za-z]:[\\/]/.test(cwd);
   if (!isAbsolute) {
     await createClient(selectedAgent.value);
-    acpClient.value?.setError(`Working directory must be an absolute path (got: ${cwd}).`);
+    if (acpClient.value) {
+      acpClient.value.sessionError = `Working directory must be an absolute path (got: ${cwd}).`;
+    }
     return;
   }
 
@@ -287,14 +279,6 @@ async function handleNewSession() {
 async function handleResumeSession(session: SavedSession) {
   selectedAgent.value = session.agentName;
   try {
-    await resumeSession(session);
-  } catch (e) {
-    console.error('Failed to resume session:', e);
-  }
-}
-
-async function resumeSession(session: SavedSession) {
-  try {
     const client = await createClient(session.agentName);
     await client.loadSavedSession(session, appVersion);
     await saveSessionsToStore();
@@ -306,7 +290,7 @@ async function resumeSession(session: SavedSession) {
         console.warn('disconnect during resumeSession cleanup failed:', cleanupErr);
       }
     }
-    throw e;
+    console.error('Failed to resume session:', e);
   }
 }
 
@@ -334,22 +318,6 @@ async function handleCancelConnection() {
   }
 }
 
-function handlePermissionSelect(optionId: string) {
-  acpClient.value?.resolvePermission(optionId);
-}
-
-function handlePermissionCancel() {
-  acpClient.value?.cancelPermission();
-}
-
-function handleAuthMethodSelect(methodId: string) {
-  acpClient.value?.selectAuthMethod(methodId);
-}
-
-function handleAuthMethodCancel() {
-  acpClient.value?.cancelAuthSelection();
-}
-
 async function handleSendPrompt(text: string) {
   if (!acpClient.value) {
     return;
@@ -365,12 +333,6 @@ async function handleSendPrompt(text: string) {
     }
   } catch (e) {
     console.error('Failed to send prompt:', e);
-  }
-}
-
-async function handleCancelOperation() {
-  if (acpClient.value) {
-    await acpClient.value.cancelCurrentSession();
   }
 }
 
@@ -392,35 +354,6 @@ async function handleModelChange(modelId: string) {
   }
 }
 
-function handleTrafficTogglePause() {
-  acpClient.value?.toggleTrafficPause();
-}
-
-function handleTrafficClear() {
-  acpClient.value?.clearTraffic();
-}
-
-function handleTrafficSearch(query: string) {
-  acpClient.value?.setTrafficSearch(query);
-}
-
-function handleTrafficClearSearch() {
-  acpClient.value?.clearTrafficSearch();
-}
-
-function handleTrafficFilterChange(filter: TrafficFilter) {
-  acpClient.value?.setTrafficFilter(filter);
-}
-
-function toggleSidebar() {
-  showSidebar.value = !showSidebar.value;
-}
-
-/** Close the drawer when the user taps the backdrop on a narrow viewport. */
-function handleBackdropClick() {
-  if (isNarrowLayout.value) showSidebar.value = false;
-}
-
 onBeforeUnmount(() => {
   if (narrowMql) {
     narrowMql.removeEventListener('change', syncNarrowLayout);
@@ -439,11 +372,6 @@ onBeforeUnmount(() => {
   }
 });
 
-function clearError() {
-  acpClient.value?.clearError();
-  configStore.clearError();
-}
-
 async function tryReconnect(): Promise<boolean> {
   if (isConnected.value || isConnecting.value || isLoading.value) {
     return false;
@@ -459,7 +387,7 @@ async function tryReconnect(): Promise<boolean> {
       throw new Error(`Agent '${session.agentName}' not found in config`);
     }
     const client = reactive(new AcpClientBridge(url));
-    client.setCurrentSession(session);
+    client.currentSession = session;
     acpClient.value = client;
     await client.loadSavedSession(session, appVersion, true);
     await saveSessionsToStore();
@@ -489,7 +417,7 @@ async function tryReconnect(): Promise<boolean> {
             title="ACP Traffic Monitor"
           >📡</button>
           <button class="settings-btn" @click="showSettings = true" title="Settings">⚙</button>
-          <button class="toggle-btn" @click="toggleSidebar">◀</button>
+          <button class="toggle-btn" @click="showSidebar = !showSidebar">◀</button>
         </div>
       </div>
 
@@ -562,7 +490,7 @@ async function tryReconnect(): Promise<boolean> {
     <div
       v-show="isNarrowLayout && showSidebar"
       class="drawer-backdrop"
-      @click="handleBackdropClick"
+      @click="isNarrowLayout && (showSidebar = false)"
     />
 
     <!-- Mobile hamburger to open the drawer when collapsed. The desktop
@@ -579,7 +507,7 @@ async function tryReconnect(): Promise<boolean> {
     <button
       v-if="!showSidebar"
       class="sidebar-toggle-collapsed"
-      @click="toggleSidebar"
+      @click="showSidebar = !showSidebar"
     >
       ▶
     </button>
@@ -604,10 +532,17 @@ async function tryReconnect(): Promise<boolean> {
           <button
             v-if="canManuallyReconnect"
             class="error-action"
-            @click="handleManualReconnect"
+            @click="tryReconnect"
             title="Reconnect"
           >Reconnect</button>
-          <button class="error-close" @click="clearError" title="Dismiss">×</button>
+          <button
+            class="error-close"
+            title="Dismiss"
+            @click="() => {
+              if (acpClient) acpClient.sessionError = null;
+              configStore.error = null;
+            }"
+          >×</button>
         </div>
 
         <!-- Chat View when connected -->
@@ -623,7 +558,7 @@ async function tryReconnect(): Promise<boolean> {
           :current-model-id="currentModelId"
           :available-commands="availableCommands"
           @send="handleSendPrompt"
-          @cancel="handleCancelOperation"
+          @cancel="acpClient?.cancelCurrentSession()"
           @mode-change="handleModeChange"
           @model-change="handleModelChange"
         />
@@ -646,11 +581,11 @@ async function tryReconnect(): Promise<boolean> {
           :is-paused="isTrafficPaused"
           :filter="trafficFilter"
           :search-query="trafficSearchQuery"
-          @toggle-pause="handleTrafficTogglePause"
-          @clear="handleTrafficClear"
-          @search="handleTrafficSearch"
-          @clear-search="handleTrafficClearSearch"
-          @filter-change="handleTrafficFilterChange"
+          @toggle-pause="acpClient && (acpClient.isTrafficPaused = !acpClient.isTrafficPaused)"
+          @clear="acpClient && (acpClient.trafficEntries = [])"
+          @search="(query) => acpClient && (acpClient.trafficSearchQuery = query)"
+          @clear-search="acpClient && (acpClient.trafficSearchQuery = '')"
+          @filter-change="(filter) => acpClient && (acpClient.trafficFilter = filter)"
           @close="showTrafficMonitor = false"
         />
       </div>
@@ -660,8 +595,8 @@ async function tryReconnect(): Promise<boolean> {
     <PermissionDialog
       v-if="pendingPermission"
       :request="pendingPermission"
-      @select="handlePermissionSelect"
-      @cancel="handlePermissionCancel"
+      @select="(optionId) => acpClient?.resolvePermission(optionId)"
+      @cancel="acpClient?.cancelPermission()"
     />
 
     <!-- Auth Method Dialog -->
@@ -669,8 +604,8 @@ async function tryReconnect(): Promise<boolean> {
       v-if="pendingAuthMethods.length > 0"
       :auth-methods="pendingAuthMethods"
       :agent-name="pendingAuthAgentName"
-      @select="handleAuthMethodSelect"
-      @cancel="handleAuthMethodCancel"
+      @select="(methodId) => acpClient?.selectAuthMethod(methodId)"
+      @cancel="acpClient?.cancelAuthSelection()"
     />
 
     <!-- Settings -->

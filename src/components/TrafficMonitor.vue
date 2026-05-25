@@ -57,20 +57,6 @@ onUnmounted(() => {
   document.removeEventListener('mouseup', stopResize);
 });
 
-function formatTime(timestamp: number): string {
-  const date = new Date(timestamp);
-  return (
-    date.toLocaleTimeString('en-US', {
-      hour12: false,
-      hour: '2-digit',
-      minute: '2-digit',
-      second: '2-digit',
-    }) +
-    '.' +
-    String(date.getMilliseconds()).padStart(3, '0')
-  );
-}
-
 function toggleExpand(id: string) {
   if (expandedIds.value.has(id)) {
     expandedIds.value.delete(id);
@@ -86,22 +72,6 @@ function formatJson(payload: unknown): string {
   } catch {
     return String(payload);
   }
-}
-
-function getEntryClass(entry: TrafficEntry): string {
-  const classes = ['entry', entry.direction];
-  if (entry.error) classes.push('error');
-  return classes.join(' ');
-}
-
-function getDirectionIcon(entry: TrafficEntry): string {
-  return entry.direction === 'out' ? '->' : '<-';
-}
-
-function getTypeLabel(entry: TrafficEntry): string {
-  if (entry.type === 'notification') return '(notification)';
-  if (entry.type === 'response') return '(response)';
-  return '';
 }
 
 watch(
@@ -196,14 +166,25 @@ function handleCopy(entry: TrafficEntry) {
       <div
         v-for="entry in filteredEntries"
         :key="entry.id"
-        :class="getEntryClass(entry)"
+        :class="['entry', entry.direction, { error: entry.error }]"
       >
         <div class="entry-header" @click="toggleExpand(entry.id)">
           <span class="expand-icon">{{ expandedIds.has(entry.id) ? 'v' : '>' }}</span>
-          <span class="timestamp">{{ formatTime(entry.timestamp) }}</span>
-          <span class="direction-icon">{{ getDirectionIcon(entry) }}</span>
+          <span class="timestamp">
+            {{
+              new Date(entry.timestamp).toLocaleTimeString('en-US', {
+                hour12: false,
+                hour: '2-digit',
+                minute: '2-digit',
+                second: '2-digit',
+              }) + '.' + String(new Date(entry.timestamp).getMilliseconds()).padStart(3, '0')
+            }}
+          </span>
+          <span class="direction-icon">{{ entry.direction === 'out' ? '->' : '<-' }}</span>
           <span class="method">{{ entry.method }}</span>
-          <span class="type-label">{{ getTypeLabel(entry) }}</span>
+          <span class="type-label">
+            {{ entry.type === 'notification' ? '(notification)' : entry.type === 'response' ? '(response)' : '' }}
+          </span>
           <span v-if="entry.requestId !== undefined" class="request-id">#{{ entry.requestId }}</span>
           <button class="copy-btn" title="Copy JSON" @click.stop="handleCopy(entry)">
             Copy

@@ -11,10 +11,7 @@ import type {
   NewSessionResponse,
   LoadSessionRequest,
   LoadSessionResponse,
-  PromptRequest,
   PromptResponse,
-  CancelNotification,
-  AuthenticateRequest,
   AuthenticateResponse,
   AuthMethod,
 } from '@agentclientprotocol/sdk';
@@ -127,26 +124,6 @@ export class AcpClientBridge implements Client {
     }
   }
 
-  clearTraffic(): void {
-    this.trafficEntries = [];
-  }
-
-  toggleTrafficPause(): void {
-    this.isTrafficPaused = !this.isTrafficPaused;
-  }
-
-  setTrafficFilter(filter: TrafficFilter): void {
-    this.trafficFilter = filter;
-  }
-
-  setTrafficSearch(query: string): void {
-    this.trafficSearchQuery = query;
-  }
-
-  clearTrafficSearch(): void {
-    this.trafficSearchQuery = '';
-  }
-
   async connect(): Promise<void> {
     if (this.socketReadyState === WebSocket.OPEN) return;
     if (this.connectPromise) return this.connectPromise;
@@ -158,7 +135,17 @@ export class AcpClientBridge implements Client {
     this.socket = socket;
     this.socketReadyState = socket.readyState;
     socket.addEventListener('message', (event) => {
-      this.handleSocketMessage(event);
+      if (typeof event.data !== 'string') {
+        console.error('Received non-string WebSocket frame; dropping', event.data);
+        return;
+      }
+
+      for (const frame of event.data.includes('\n') ? event.data.split('\n') : [event.data]) {
+        const message = frame.trim();
+        if (message) {
+          this.handleMessage(message);
+        }
+      }
     });
     socket.addEventListener('close', (event) => {
       this.handleSocketClose(
@@ -219,20 +206,6 @@ export class AcpClientBridge implements Client {
       this.socket?.readyState === WebSocket.CONNECTING
     ) {
       this.socket.close(1000, 'client closed');
-    }
-  }
-
-  private handleSocketMessage(event: MessageEvent): void {
-    if (typeof event.data !== 'string') {
-      console.error('Received non-string WebSocket frame; dropping', event.data);
-      return;
-    }
-
-    for (const frame of event.data.includes('\n') ? event.data.split('\n') : [event.data]) {
-      const message = frame.trim();
-      if (message) {
-        this.handleMessage(message);
-      }
     }
   }
 
@@ -308,7 +281,9 @@ export class AcpClientBridge implements Client {
           method: parsed.method,
           payload: parsed,
         });
-        this.handleNotification(parsed.method, parsed.params);
+        if (parsed.method === 'session/update') {
+          this.handleSessionUpdate(parsed.params as SessionNotification);
+        }
       }
     } catch (e) {
       console.error('Failed to parse message:', message, e);
@@ -351,12 +326,6 @@ export class AcpClientBridge implements Client {
     });
 
     this.sendFrame(JSON.stringify(response));
-  }
-
-  private handleNotification(method: string, params: unknown): void {
-    if (method === 'session/update') {
-      this.handleSessionUpdate(params as SessionNotification);
-    }
   }
 
   private handleSessionUpdate(notification: SessionNotification): void {
@@ -512,23 +481,6 @@ export class AcpClientBridge implements Client {
     });
   }
 
-  private async sendNotification(method: string, params?: unknown): Promise<void> {
-    const notification = {
-      jsonrpc: '2.0',
-      method,
-      params: params || {},
-    };
-
-    this.addTrafficEntry({
-      direction: 'out',
-      type: 'notification',
-      method,
-      payload: notification,
-    });
-
-    this.sendFrame(JSON.stringify(notification));
-  }
-
   private sendFrame(json: string): void {
     if (!this.socket || this.disconnected || this.socket.readyState === WebSocket.CLOSED) {
       throw new Error('WebSocket is closed');
@@ -551,43 +503,6 @@ export class AcpClientBridge implements Client {
     return this.sendRequest<LoadSessionResponse>('session/load', params);
   }
 
-  async prompt(params: PromptRequest): Promise<PromptResponse> {
-    return this.sendRequest<PromptResponse>('session/prompt', params);
-  }
-
-  async cancel(params: CancelNotification): Promise<void> {
-    await this.sendNotification('session/cancel', params);
-  }
-
-  async setMode(params: { sessionId: string; modeId: string }): Promise<void> {
-    await this.sendRequest('session/set_mode', params);
-  }
-
-  async unstable_setSessionModel(params: { sessionId: string; modelId: string }): Promise<void> {
-    await this.sendRequest('session/set_model', params);
-  }
-
-  async authenticate(params: AuthenticateRequest): Promise<AuthenticateResponse> {
-    return this.sendRequest<AuthenticateResponse>('authenticate', params);
-  }
-
-  private async initializeForSession(appVersion: string): Promise<InitializeResponse> {
-    return this.initialize({
-      protocolVersion: PROTOCOL_VERSION,
-      clientCapabilities: {
-        fs: {
-          readTextFile: false,
-          writeTextFile: false,
-        },
-      },
-      clientInfo: {
-        name: 'acp-ui',
-        title: 'ACP UI',
-        version: appVersion,
-      },
-    });
-  }
-
   private resetSessionData(): void {
     this.messages = [];
     this.toolCalls.clear();
@@ -598,16 +513,6 @@ export class AcpClientBridge implements Client {
     this.currentModelId = '';
   }
 
-  private startConnectionTimer(): void {
-    this.startupPhase = 'connecting';
-    this.startupLogs = [];
-    this.startupElapsed = 0;
-    this.stopConnectionTimer();
-    this.startupTimer = setInterval(() => {
-      this.startupElapsed++;
-    }, 1000);
-  }
-
   private stopConnectionTimer(): void {
     if (this.startupTimer) {
       clearInterval(this.startupTimer);
@@ -615,52 +520,10 @@ export class AcpClientBridge implements Client {
     }
   }
 
-  private applyNewSessionMetadata(sessionResponse: NewSessionResponse): void {
-    if (sessionResponse.modes) {
-      this.availableModes = (sessionResponse.modes.availableModes || []).map(m => ({
-        id: m.id,
-        name: m.name,
-        description: m.description ?? undefined,
-      }));
-      this.currentModeId = sessionResponse.modes.currentModeId || '';
-    } else {
-      this.availableModes = [];
-      this.currentModeId = '';
-    }
-
-    if (sessionResponse.models) {
-      this.availableModels = (sessionResponse.models.availableModels || []).map(m => ({
-        modelId: m.modelId,
-        name: m.name,
-        description: m.description ?? undefined,
-      }));
-      this.currentModelId = sessionResponse.models.currentModelId || '';
-    } else {
-      this.availableModels = [];
-      this.currentModelId = '';
-    }
-  }
-
   private assertNotAborted(): void {
     if (this.connectionAborted) {
       throw new Error('Connection cancelled');
     }
-  }
-
-  private isAuthenticationRequired(error: unknown): boolean {
-    const message = error instanceof Error ? error.message : String(error);
-    return message.toLowerCase().includes('authentication required') || message.includes('-32000');
-  }
-
-  private async promptForAuthMethod(
-    authMethods: AuthMethod[],
-    agentName: string
-  ): Promise<string | null> {
-    return new Promise((resolve) => {
-      this.pendingAuthMethods = authMethods;
-      this.pendingAuthAgentName = agentName;
-      this.authMethodResolver = resolve;
-    });
   }
 
   private clearAuthPrompt(): void {
@@ -675,18 +538,25 @@ export class AcpClientBridge implements Client {
     agentName: string,
     retry: () => Promise<T>
   ): Promise<T> {
-    if (!this.isAuthenticationRequired(error) || authMethods.length === 0) {
+    const message = error instanceof Error ? error.message : String(error);
+    const requiresAuth =
+      message.toLowerCase().includes('authentication required') || message.includes('-32000');
+    if (!requiresAuth || authMethods.length === 0) {
       throw error;
     }
 
-    const selectedMethodId = await this.promptForAuthMethod(authMethods, agentName);
+    const selectedMethodId = await new Promise<string | null>((resolve) => {
+      this.pendingAuthMethods = authMethods;
+      this.pendingAuthAgentName = agentName;
+      this.authMethodResolver = resolve;
+    });
     this.assertNotAborted();
     if (!selectedMethodId) {
       await this.disconnect();
       throw new Error('Authentication cancelled by user');
     }
 
-    await this.authenticate({ methodId: selectedMethodId });
+    await this.sendRequest<AuthenticateResponse>('authenticate', { methodId: selectedMethodId });
     this.assertNotAborted();
     return retry();
   }
@@ -701,13 +571,32 @@ export class AcpClientBridge implements Client {
     this.connectionAborted = false;
     this.sessionError = null;
     this.currentSession = null;
-    this.startConnectionTimer();
+    this.startupPhase = 'connecting';
+    this.startupLogs = [];
+    this.startupElapsed = 0;
+    this.stopConnectionTimer();
+    this.startupTimer = setInterval(() => {
+      this.startupElapsed++;
+    }, 1000);
 
     try {
       await this.connect();
       this.assertNotAborted();
       this.resetSessionData();
-      const initResponse = await this.initializeForSession(appVersion);
+      const initResponse = await this.initialize({
+        protocolVersion: PROTOCOL_VERSION,
+        clientCapabilities: {
+          fs: {
+            readTextFile: false,
+            writeTextFile: false,
+          },
+        },
+        clientInfo: {
+          name: 'acp-ui',
+          title: 'ACP UI',
+          version: appVersion,
+        },
+      });
       const authMethods = initResponse.authMethods || [];
       const supportsLoadSession = initResponse.agentCapabilities?.loadSession ?? false;
       this.assertNotAborted();
@@ -721,7 +610,29 @@ export class AcpClientBridge implements Client {
         )
       );
       this.assertNotAborted();
-      this.applyNewSessionMetadata(sessionResponse);
+      if (sessionResponse.modes) {
+        this.availableModes = (sessionResponse.modes.availableModes || []).map(m => ({
+          id: m.id,
+          name: m.name,
+          description: m.description ?? undefined,
+        }));
+        this.currentModeId = sessionResponse.modes.currentModeId || '';
+      } else {
+        this.availableModes = [];
+        this.currentModeId = '';
+      }
+
+      if (sessionResponse.models) {
+        this.availableModels = (sessionResponse.models.availableModels || []).map(m => ({
+          modelId: m.modelId,
+          name: m.name,
+          description: m.description ?? undefined,
+        }));
+        this.currentModelId = sessionResponse.models.currentModelId || '';
+      } else {
+        this.availableModels = [];
+        this.currentModelId = '';
+      }
       const session = {
         id: crypto.randomUUID(),
         agentName,
@@ -756,7 +667,20 @@ export class AcpClientBridge implements Client {
     try {
       await this.connect();
       this.assertNotAborted();
-      const initResponse = await this.initializeForSession(appVersion);
+      const initResponse = await this.initialize({
+        protocolVersion: PROTOCOL_VERSION,
+        clientCapabilities: {
+          fs: {
+            readTextFile: false,
+            writeTextFile: false,
+          },
+        },
+        clientInfo: {
+          name: 'acp-ui',
+          title: 'ACP UI',
+          version: appVersion,
+        },
+      });
       const authMethods = initResponse.authMethods || [];
       this.resetSessionData();
       this.assertNotAborted();
@@ -806,7 +730,7 @@ export class AcpClientBridge implements Client {
     });
 
     try {
-      return await this.prompt({
+      return await this.sendRequest<PromptResponse>('session/prompt', {
         sessionId,
         prompt: [
           {
@@ -826,39 +750,40 @@ export class AcpClientBridge implements Client {
   async cancelCurrentSession(): Promise<void> {
     const sessionId = this.currentSession?.sessionId;
     if (sessionId) {
-      await this.cancel({ sessionId });
+      const notification = {
+        jsonrpc: '2.0',
+        method: 'session/cancel',
+        params: { sessionId },
+      };
+
+      this.addTrafficEntry({
+        direction: 'out',
+        type: 'notification',
+        method: 'session/cancel',
+        payload: notification,
+      });
+
+      this.sendFrame(JSON.stringify(notification));
     }
   }
 
   async setSessionMode(modeId: string): Promise<void> {
     const sessionId = this.currentSession?.sessionId;
     if (!sessionId) return;
-    await this.setMode({ sessionId, modeId });
+    await this.sendRequest('session/set_mode', { sessionId, modeId });
     this.currentModeId = modeId;
   }
 
   async setSessionModel(modelId: string): Promise<void> {
     const sessionId = this.currentSession?.sessionId;
     if (!sessionId) return;
-    await this.unstable_setSessionModel({ sessionId, modelId });
+    await this.sendRequest('session/set_model', { sessionId, modelId });
     this.currentModelId = modelId;
   }
 
   cancelConnection(): void {
     this.connectionAborted = true;
     this.cancelAuthSelection();
-  }
-
-  clearError(): void {
-    this.sessionError = null;
-  }
-
-  setError(message: string): void {
-    this.sessionError = message;
-  }
-
-  setCurrentSession(session: SavedSession | null): void {
-    this.currentSession = session;
   }
 
   async requestPermission(

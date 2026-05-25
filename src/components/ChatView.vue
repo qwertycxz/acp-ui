@@ -93,31 +93,6 @@ function handleKeyDown(event: KeyboardEvent) {
   }
 }
 
-function handleCommandSelect(command: SlashCommand) {
-  // Replace current input with the command
-  if (command.hint) {
-    inputText.value = `/${command.name} `;
-  } else {
-    inputText.value = `/${command.name} `;
-  }
-}
-
-function handleCommandClose() {
-  // Just dismiss, keep the text
-}
-
-function handleCancel() {
-  emit('cancel');
-}
-
-async function handleModeChange(modeId: string) {
-  emit('modeChange', modeId);
-}
-
-async function handleModelChange(modelId: string) {
-  emit('modelChange', modelId);
-}
-
 function isThoughtExpanded(messageId: string): boolean {
   return expandedThoughts.value.has(messageId);
 }
@@ -169,14 +144,14 @@ function getStatusIcon(status: string): string {
           :models="props.availableModels"
           :current-model-id="props.currentModelId"
           :disabled="props.isLoading"
-          @change="handleModelChange"
+          @change="(modelId) => emit('modelChange', modelId)"
         />
         <ModePicker
           v-if="props.availableModes.length > 0"
           :modes="props.availableModes"
           :current-mode-id="props.currentModeId"
           :disabled="props.isLoading"
-          @change="handleModeChange"
+          @change="(modeId) => emit('modeChange', modeId)"
         />
         <span class="agent-name">{{ props.currentSession?.agentName }}</span>
       </div>
@@ -233,7 +208,7 @@ function getStatusIcon(status: string): string {
       <div v-if="props.isLoading" class="loading-indicator">
         <span class="spinner"></span>
         <span>Thinking...</span>
-        <button class="cancel-btn" @click="handleCancel">Cancel</button>
+        <button class="cancel-btn" @click="emit('cancel')">Cancel</button>
       </div>
     </div>
 
@@ -243,8 +218,7 @@ function getStatusIcon(status: string): string {
         :commands="props.availableCommands"
         :filter="commandFilter"
         :visible="showCommandPalette"
-        @select="handleCommandSelect"
-        @close="handleCommandClose"
+        @select="(command) => (inputText = `/${command.name} `)"
       />
       <textarea
         v-model="inputText"

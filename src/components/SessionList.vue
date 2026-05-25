@@ -16,14 +16,6 @@ const sessions = computed(() =>
   [...props.sessions].sort((a, b) => b.lastUpdated - a.lastUpdated)
 );
 
-function formatDate(timestamp: number): string {
-  return new Date(timestamp).toLocaleString();
-}
-
-function handleResume(session: SavedSession) {
-  emit('resume', session);
-}
-
 function handleDelete(sessionId: string, event: Event) {
   event.stopPropagation();
   if (confirm('Delete this session?')) {
@@ -46,12 +38,12 @@ function handleDelete(sessionId: string, event: Event) {
         v-for="session in sessions"
         :key="session.id"
         class="session-item"
-        @click="handleResume(session)"
+        @click="emit('resume', session)"
       >
         <div class="session-info">
           <span class="session-title">{{ session.title }}</span>
           <span class="session-agent">{{ session.agentName }}</span>
-          <span class="session-date">{{ formatDate(session.lastUpdated) }}</span>
+          <span class="session-date">{{ new Date(session.lastUpdated).toLocaleString() }}</span>
         </div>
         <button
           class="delete-btn"

@@ -10,10 +10,6 @@ const emit = defineEmits<{
   (e: 'select', methodId: string): void;
   (e: 'cancel'): void;
 }>();
-
-function handleSelect(methodId: string) {
-  emit('select', methodId);
-}
 </script>
 
 <template>
@@ -35,7 +31,7 @@ function handleSelect(methodId: string) {
             v-for="method in authMethods"
             :key="method.id"
             class="auth-method-btn"
-            @click="handleSelect(method.id)"
+            @click="emit('select', method.id)"
           >
             <div class="method-info">
               <span class="method-name">{{ method.name }}</span>
