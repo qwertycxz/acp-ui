@@ -7,19 +7,23 @@ import type {
   RequestPermissionResponse,
   InitializeRequest,
   InitializeResponse,
+  ListSessionsRequest,
+  ListSessionsResponse,
   NewSessionRequest,
   NewSessionResponse,
   LoadSessionRequest,
   LoadSessionResponse,
+  DeleteSessionRequest,
+  DeleteSessionResponse,
   PromptResponse,
   AuthenticateResponse,
   AuthMethod,
 } from '@agentclientprotocol/sdk';
 import type {
+  AgentSession,
   ChatMessage,
   ModelInfo,
   PermissionRequest as LocalPermissionRequest,
-  SavedSession,
   SessionMode,
   SlashCommand,
   ToolCallInfo,
@@ -47,6 +51,8 @@ export class AcpClientBridge implements Client {
   private disconnected = false;
   private connectionAborted = false;
   private startupTimer: ReturnType<typeof setInterval> | null = null;
+  private initialized = false;
+  private authMethods: AuthMethod[] = [];
 
   public pendingPermissionRequest: LocalPermissionRequest | null = null;
   private permissionResolver: PermissionResolver | null = null;
@@ -61,7 +67,11 @@ export class AcpClientBridge implements Client {
   public availableModels: ModelInfo[] = [];
   public currentModelId = '';
 
-  public currentSession: SavedSession | null = null;
+  public currentSession: AgentSession | null = null;
+  public sessions: AgentSession[] = [];
+  public supportsLoadSession = false;
+  public supportsSessionList = false;
+  public supportsSessionDelete = false;
   public isLoading = false;
   public isConnecting = false;
   public isReconnecting = false;
@@ -79,7 +89,11 @@ export class AcpClientBridge implements Client {
   }
 
   public get isConnected(): boolean {
-    return this.socketReadyState === WebSocket.OPEN && this.currentSession !== null;
+    return this.socketReadyState === WebSocket.OPEN && this.initialized;
+  }
+
+  public get hasActiveSession(): boolean {
+    return this.isConnected && this.currentSession !== null;
   }
 
   public get filteredTrafficEntries(): TrafficEntry[] {
@@ -126,10 +140,8 @@ export class AcpClientBridge implements Client {
   async connect(): Promise<void> {
     if (this.socketReadyState === WebSocket.OPEN) return;
     if (this.connectPromise) return this.connectPromise;
-    if (this.disconnected) {
-      throw new Error('WebSocket is closed');
-    }
 
+    this.disconnected = false;
     const socket = markRaw(new WebSocket(this.url));
     this.socket = socket;
     this.socketReadyState = socket.readyState;
@@ -194,6 +206,7 @@ export class AcpClientBridge implements Client {
   async disconnect(): Promise<void> {
     if (this.disconnected) return;
     this.disconnected = true;
+    this.initialized = false;
     this.rejectInFlight(new Error('websocket closed: client disconnected'));
     this.stopConnectionTimer();
     this.isLoading = false;
@@ -211,6 +224,7 @@ export class AcpClientBridge implements Client {
   private handleSocketClose(reason: string): void {
     if (this.disconnected) return;
     this.disconnected = true;
+    this.initialized = false;
     this.rejectInFlight(new Error(reason));
     this.stopConnectionTimer();
     this.socketReadyState = WebSocket.CLOSED;
@@ -502,6 +516,14 @@ export class AcpClientBridge implements Client {
     return this.sendRequest<LoadSessionResponse>('session/load', params);
   }
 
+  async listSessions(params: ListSessionsRequest = {}): Promise<ListSessionsResponse> {
+    return this.sendRequest<ListSessionsResponse>('session/list', params);
+  }
+
+  async deleteSession(params: DeleteSessionRequest): Promise<DeleteSessionResponse> {
+    return this.sendRequest<DeleteSessionResponse>('session/delete', params);
+  }
+
   private resetSessionData(): void {
     this.messages = [];
     this.toolCalls.clear();
@@ -528,6 +550,89 @@ export class AcpClientBridge implements Client {
   private clearAuthPrompt(): void {
     this.authMethodResolver = null;
     this.pendingAuthMethods = [];
+  }
+
+  private async initializeConnection(appVersion: string): Promise<InitializeResponse> {
+    await this.connect();
+    this.assertNotAborted();
+    if (this.initialized) {
+      return {} as InitializeResponse;
+    }
+
+    const initResponse = await this.initialize({
+      protocolVersion: PROTOCOL_VERSION,
+      clientCapabilities: {
+        fs: {
+          readTextFile: false,
+          writeTextFile: false,
+        },
+      },
+      clientInfo: {
+        name: 'acp-ui',
+        title: 'ACP UI',
+        version: appVersion,
+      },
+    });
+    const capabilities = initResponse.agentCapabilities;
+    this.authMethods = initResponse.authMethods || [];
+    this.supportsLoadSession = capabilities?.loadSession ?? false;
+    this.supportsSessionList = !!capabilities?.sessionCapabilities?.list;
+    this.supportsSessionDelete = !!capabilities?.sessionCapabilities?.delete;
+    this.initialized = true;
+    return initResponse;
+  }
+
+  async connectAndRefreshSessions(appVersion: string, reconnecting = false): Promise<void> {
+    this.isConnecting = !reconnecting;
+    this.isReconnecting = reconnecting;
+    this.connectionAborted = false;
+    this.sessionError = null;
+    this.startupPhase = 'connecting';
+    this.startupLogs = [];
+    this.startupElapsed = 0;
+    this.stopConnectionTimer();
+    this.startupTimer = setInterval(() => {
+      this.startupElapsed++;
+    }, 1000);
+
+    try {
+      await this.initializeConnection(appVersion);
+      await this.refreshSessions();
+    } catch (e) {
+      this.sessionError = e instanceof Error ? e.message : String(e);
+      throw e;
+    } finally {
+      this.isConnecting = false;
+      this.isReconnecting = false;
+      this.stopConnectionTimer();
+    }
+  }
+
+  async refreshSessions(): Promise<void> {
+    if (!this.supportsSessionList) {
+      this.sessions = [];
+      return;
+    }
+
+    const sessions: AgentSession[] = [];
+    let cursor: string | null | undefined;
+    do {
+      const request = cursor ? { cursor } : {};
+      const response = await this.listSessions(request).catch((error: unknown) =>
+        this.retryWithAuth(
+          error,
+          this.authMethods,
+          () => this.listSessions(request)
+        )
+      );
+      sessions.push(...response.sessions);
+      cursor = response.nextCursor;
+    } while (cursor);
+
+    this.sessions = sessions;
+    if (this.currentSession) {
+      this.currentSession = sessions.find((session) => session.sessionId === this.currentSession?.sessionId) ?? this.currentSession;
+    }
   }
 
   async retryWithAuth<T>(
@@ -572,31 +677,14 @@ export class AcpClientBridge implements Client {
     }, 1000);
 
     try {
-      await this.connect();
-      this.assertNotAborted();
+      await this.initializeConnection(appVersion);
       this.resetSessionData();
-      const initResponse = await this.initialize({
-        protocolVersion: PROTOCOL_VERSION,
-        clientCapabilities: {
-          fs: {
-            readTextFile: false,
-            writeTextFile: false,
-          },
-        },
-        clientInfo: {
-          name: 'acp-ui',
-          title: 'ACP UI',
-          version: appVersion,
-        },
-      });
-      const authMethods = initResponse.authMethods || [];
-      const supportsLoadSession = initResponse.agentCapabilities?.loadSession ?? false;
       this.assertNotAborted();
 
       const sessionResponse = await this.newSession({ cwd, mcpServers: [] }).catch((error: unknown) =>
         this.retryWithAuth(
           error,
-          authMethods,
+          this.authMethods,
           () => this.newSession({ cwd, mcpServers: [] })
         )
       );
@@ -625,17 +713,15 @@ export class AcpClientBridge implements Client {
         this.currentModelId = '';
       }
       const session = {
-        id: crypto.randomUUID(),
         sessionId: sessionResponse.sessionId,
         title: `Session ${new Date().toLocaleString()}`,
-        lastUpdated: Date.now(),
+        updatedAt: new Date().toISOString(),
         cwd,
-        supportsLoadSession,
       };
       this.currentSession = session;
+      await this.refreshSessions();
     } catch (e) {
       this.sessionError = e instanceof Error ? e.message : String(e);
-      await this.disconnect();
       throw e;
     } finally {
       this.isLoading = false;
@@ -644,8 +730,8 @@ export class AcpClientBridge implements Client {
     }
   }
 
-  async loadSavedSession(
-    savedSession: SavedSession,
+  async loadAgentSession(
+    session: AgentSession,
     appVersion: string,
     reconnecting = false
   ): Promise<void> {
@@ -655,47 +741,30 @@ export class AcpClientBridge implements Client {
     this.sessionError = null;
 
     try {
-      await this.connect();
-      this.assertNotAborted();
-      const initResponse = await this.initialize({
-        protocolVersion: PROTOCOL_VERSION,
-        clientCapabilities: {
-          fs: {
-            readTextFile: false,
-            writeTextFile: false,
-          },
-        },
-        clientInfo: {
-          name: 'acp-ui',
-          title: 'ACP UI',
-          version: appVersion,
-        },
-      });
-      const authMethods = initResponse.authMethods || [];
+      await this.initializeConnection(appVersion);
       this.resetSessionData();
       this.assertNotAborted();
 
       await this.loadSession({
-        sessionId: savedSession.sessionId,
-        cwd: savedSession.cwd,
+        sessionId: session.sessionId,
+        cwd: session.cwd,
         mcpServers: [],
       }).catch((error: unknown) =>
         this.retryWithAuth(
           error,
-          authMethods,
+          this.authMethods,
           () =>
             this.loadSession({
-              sessionId: savedSession.sessionId,
-              cwd: savedSession.cwd,
+              sessionId: session.sessionId,
+              cwd: session.cwd,
               mcpServers: [],
             })
         )
       );
-      this.currentSession = savedSession;
-      savedSession.lastUpdated = Date.now();
+      this.currentSession = session;
+      await this.refreshSessions();
     } catch (e) {
       this.sessionError = e instanceof Error ? e.message : String(e);
-      await this.disconnect();
       throw e;
     } finally {
       this.isLoading = false;
@@ -734,6 +803,25 @@ export class AcpClientBridge implements Client {
     } finally {
       this.isLoading = false;
     }
+  }
+
+  async deleteAgentSession(sessionId: string): Promise<void> {
+    if (!this.supportsSessionDelete) {
+      throw new Error('Agent does not support deleting sessions');
+    }
+    await this.deleteSession({ sessionId }).catch((error: unknown) =>
+      this.retryWithAuth(
+        error,
+        this.authMethods,
+        () => this.deleteSession({ sessionId })
+      )
+    );
+    this.sessions = this.sessions.filter((session) => session.sessionId !== sessionId);
+    if (this.currentSession?.sessionId === sessionId) {
+      this.currentSession = null;
+      this.resetSessionData();
+    }
+    await this.refreshSessions();
   }
 
   async cancelCurrentSession(): Promise<void> {

@@ -4,13 +4,13 @@ import { marked } from 'marked';
 import ModePicker from './ModePicker.vue';
 import ModelPicker from './ModelPicker.vue';
 import CommandPalette from './CommandPalette.vue';
-import type { ChatMessage, ModelInfo, SavedSession, SessionMode, SlashCommand } from '../lib/types';
+import type { AgentSession, ChatMessage, ModelInfo, SessionMode, SlashCommand } from '../lib/types';
 
 const props = defineProps<{
   messages: ChatMessage[];
   isLoading: boolean;
   isReconnecting: boolean;
-  currentSession: SavedSession | null;
+  currentSession: AgentSession | null;
   availableModes: SessionMode[];
   currentModeId: string;
   availableModels: ModelInfo[];

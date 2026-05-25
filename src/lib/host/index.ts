@@ -42,6 +42,3 @@ export async function saveConfig(url: string): Promise<AgentConfig> {
 
   return config;
 }
-
-export { loadKvStore } from './storage';
-export type { KVStore } from './storage';

@@ -9,7 +9,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "@agentclientprotocol/sdk": "^0.13.1",
+    "@agentclientprotocol/sdk": "^0.22.1",
     "marked": "^17.0.1",
     "pinia": "^3.0.4",
     "vue": "^3.5.13",

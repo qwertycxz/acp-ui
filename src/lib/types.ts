@@ -4,13 +4,12 @@ export interface AgentConfig {
   url: string;
 }
 
-export interface SavedSession {
-  id: string;
+export interface AgentSession {
   sessionId: string;
-  title: string;
-  lastUpdated: number;
   cwd: string;
-  supportsLoadSession?: boolean; // Whether the agent supports session/load
+  title?: string | null;
+  updatedAt?: string | null;
+  additionalDirectories?: string[];
 }
 
 export interface ChatMessage {

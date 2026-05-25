@@ -9,7 +9,6 @@ const props = defineProps<{
 }>();
 
 const emit = defineEmits<{
-  cancel: [];
   toggleDetails: [];
 }>();
 
@@ -71,12 +70,6 @@ const isLongWait = computed(() => props.elapsedSeconds > 10);
         @click="emit('toggleDetails')"
       >
         {{ showDetails ? 'Hide Details ▲' : 'Show Details ▼' }}
-      </button>
-      <button
-        class="cancel-btn"
-        @click="emit('cancel')"
-      >
-        Cancel
       </button>
     </div>
 
@@ -172,22 +165,6 @@ const isLongWait = computed(() => props.elapsedSeconds > 10);
 
 .details-btn:hover {
   background: var(--bg-hover);
-}
-
-.cancel-btn {
-  padding: 0.375rem 0.75rem;
-  border: 1px solid var(--border-color);
-  border-radius: 4px;
-  background: transparent;
-  color: var(--text-secondary);
-  font-size: 0.8rem;
-  cursor: pointer;
-}
-
-.cancel-btn:hover {
-  background: var(--bg-hover);
-  border-color: var(--bg-danger);
-  color: var(--bg-danger);
 }
 
 .logs-container {

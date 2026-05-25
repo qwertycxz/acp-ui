@@ -1,19 +1,22 @@
 <script setup lang="ts">
 import { computed } from 'vue';
-import type { SavedSession } from '../lib/types';
+import type { AgentSession } from '../lib/types';
 
 const props = defineProps<{
-  sessions: SavedSession[];
+  sessions: AgentSession[];
+  canResume: boolean;
+  canDelete: boolean;
 }>();
 
 const emit = defineEmits<{
-  resume: [session: SavedSession];
+  resume: [session: AgentSession];
   delete: [sessionId: string];
 }>();
 
-// Only show sessions that can be resumed (agent supports loadSession)
 const sessions = computed(() =>
-  [...props.sessions].sort((a, b) => b.lastUpdated - a.lastUpdated)
+  [...props.sessions].sort(
+    (a, b) => Date.parse(b.updatedAt ?? '') - Date.parse(a.updatedAt ?? '')
+  )
 );
 
 function handleDelete(sessionId: string, event: Event) {
@@ -26,27 +29,29 @@ function handleDelete(sessionId: string, event: Event) {
 
 <template>
   <div class="session-list">
-    <h3>Saved Sessions</h3>
+    <h3>Sessions</h3>
 
     <div v-if="sessions.length === 0" class="empty-state">
-      <p>No saved sessions yet.</p>
+      <p>No sessions found.</p>
       <p class="hint">Create a new session to get started.</p>
     </div>
 
     <ul v-else>
       <li
         v-for="session in sessions"
-        :key="session.id"
+        :key="session.sessionId"
         class="session-item"
-        @click="emit('resume', session)"
+        :class="{ disabled: !canResume }"
+        @click="canResume && emit('resume', session)"
       >
         <div class="session-info">
-          <span class="session-title">{{ session.title }}</span>
-          <span class="session-date">{{ new Date(session.lastUpdated).toLocaleString() }}</span>
+          <span class="session-title">{{ session.title || session.cwd }}</span>
+          <span class="session-date">{{ session.updatedAt ? new Date(session.updatedAt).toLocaleString() : session.cwd }}</span>
         </div>
         <button
+          v-if="canDelete"
           class="delete-btn"
-          @click="(e) => handleDelete(session.id, e)"
+          @click="(e) => handleDelete(session.sessionId, e)"
           title="Delete session"
         >
           ×
@@ -98,6 +103,15 @@ ul {
 
 .session-item:hover {
   background: var(--bg-hover, #f5f5f5);
+}
+
+.session-item.disabled {
+  cursor: default;
+  opacity: 0.7;
+}
+
+.session-item.disabled:hover {
+  background: transparent;
 }
 
 .session-info {
