@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, shallowRef, onMounted, onBeforeUnmount } from 'vue';
+import { ref, computed, reactive, onMounted, onBeforeUnmount } from 'vue';
 import { loadKvStore, type KVStore } from './lib/host';
 import { useConfigStore } from './stores/config';
 import { AcpClientBridge, createAcpClient } from './lib/acp-bridge';
@@ -14,6 +14,43 @@ import StartupProgress from './components/StartupProgress.vue';
 import type { AuthMethod } from '@agentclientprotocol/sdk';
 import type { ChatMessage, ModelInfo, PermissionRequest, SavedSession, SessionMode, SlashCommand } from './lib/types';
 
+type AcpClient = Pick<
+  AcpClientBridge,
+  | 'pendingPermissionRequest'
+  | 'pendingAuthMethods'
+  | 'pendingAuthAgentName'
+  | 'messages'
+  | 'availableModes'
+  | 'currentModeId'
+  | 'availableCommands'
+  | 'availableModels'
+  | 'currentModelId'
+  | 'currentSession'
+  | 'isConnected'
+  | 'isLoading'
+  | 'isConnecting'
+  | 'isReconnecting'
+  | 'sessionError'
+  | 'startupPhase'
+  | 'startupLogs'
+  | 'startupElapsed'
+  | 'disconnect'
+  | 'startNewSession'
+  | 'loadSavedSession'
+  | 'sendPromptText'
+  | 'cancelCurrentSession'
+  | 'setSessionMode'
+  | 'setSessionModel'
+  | 'cancelConnection'
+  | 'clearError'
+  | 'setError'
+  | 'setCurrentSession'
+  | 'resolvePermission'
+  | 'cancelPermission'
+  | 'selectAuthMethod'
+  | 'cancelAuthSelection'
+>;
+
 const configStore = useConfigStore();
 const appVersion =
   (import.meta.env as Record<string, string | undefined>).VITE_APP_VERSION ?? '0.0.0-web';
@@ -25,7 +62,7 @@ const showSettings = ref(false);
 const showTrafficMonitor = ref(false);
 const showStartupDetails = ref(false);
 const savedSessions = ref<SavedSession[]>([]);
-const acpClient = shallowRef<AcpClientBridge | null>(null);
+const acpClient = ref<AcpClient | null>(null);
 
 // Reactive flag tracking whether the viewport is narrow enough to show the
 // sidebar as a slide-in drawer (mobile / very narrow desktop windows). Used
@@ -62,28 +99,28 @@ function handleOnline() {
 let prefsStore: KVStore | null = null;
 let sessionsStore: KVStore | null = null;
 
-const currentSession = computed(() => acpClient.value?.currentSession.value ?? null);
+const currentSession = computed(() => acpClient.value?.currentSession ?? null);
 const isConnected = computed(() => acpClient.value?.isConnected ?? false);
-const isLoading = computed(() => acpClient.value?.isLoading.value ?? false);
-const isConnecting = computed(() => acpClient.value?.isConnecting.value ?? false);
-const isReconnecting = computed(() => acpClient.value?.isReconnecting.value ?? false);
-const sessionError = computed(() => acpClient.value?.sessionError.value ?? null);
-const startupPhase = computed(() => acpClient.value?.startupPhase.value ?? 'starting');
-const startupLogs = computed(() => acpClient.value?.startupLogs.value ?? []);
-const startupElapsed = computed(() => acpClient.value?.startupElapsed.value ?? 0);
+const isLoading = computed(() => acpClient.value?.isLoading ?? false);
+const isConnecting = computed(() => acpClient.value?.isConnecting ?? false);
+const isReconnecting = computed(() => acpClient.value?.isReconnecting ?? false);
+const sessionError = computed(() => acpClient.value?.sessionError ?? null);
+const startupPhase = computed(() => acpClient.value?.startupPhase ?? 'starting');
+const startupLogs = computed(() => acpClient.value?.startupLogs ?? []);
+const startupElapsed = computed(() => acpClient.value?.startupElapsed ?? 0);
 const error = computed(() => sessionError.value || configStore.error);
 const hasAgents = computed(() => configStore.hasAgents);
-const messages = computed<ChatMessage[]>(() => acpClient.value?.messages.value ?? []);
+const messages = computed<ChatMessage[]>(() => acpClient.value?.messages ?? []);
 const pendingPermission = computed<PermissionRequest | null>(
-  () => acpClient.value?.pendingPermissionRequest.value ?? null
+  () => acpClient.value?.pendingPermissionRequest ?? null
 );
-const pendingAuthMethods = computed<AuthMethod[]>(() => acpClient.value?.pendingAuthMethods.value ?? []);
-const pendingAuthAgentName = computed(() => acpClient.value?.pendingAuthAgentName.value ?? '');
-const availableModes = computed<SessionMode[]>(() => acpClient.value?.availableModes.value ?? []);
-const currentModeId = computed(() => acpClient.value?.currentModeId.value ?? '');
-const availableCommands = computed<SlashCommand[]>(() => acpClient.value?.availableCommands.value ?? []);
-const availableModels = computed<ModelInfo[]>(() => acpClient.value?.availableModels.value ?? []);
-const currentModelId = computed(() => acpClient.value?.currentModelId.value ?? '');
+const pendingAuthMethods = computed<AuthMethod[]>(() => acpClient.value?.pendingAuthMethods ?? []);
+const pendingAuthAgentName = computed(() => acpClient.value?.pendingAuthAgentName ?? '');
+const availableModes = computed<SessionMode[]>(() => acpClient.value?.availableModes ?? []);
+const currentModeId = computed(() => acpClient.value?.currentModeId ?? '');
+const availableCommands = computed<SlashCommand[]>(() => acpClient.value?.availableCommands ?? []);
+const availableModels = computed<ModelInfo[]>(() => acpClient.value?.availableModels ?? []);
+const currentModelId = computed(() => acpClient.value?.currentModelId ?? '');
 const resumableSessions = computed(() =>
   savedSessions.value.filter(s => s.supportsLoadSession === true)
 );
@@ -153,7 +190,7 @@ async function saveSessionsToStore() {
   }
 }
 
-async function createClient(agentName: string): Promise<AcpClientBridge> {
+async function createClient(agentName: string): Promise<AcpClient> {
   const agentConfig = configStore.getAgent(agentName);
   if (!agentConfig) {
     throw new Error(`Agent '${agentName}' not found in config`);
@@ -162,7 +199,7 @@ async function createClient(agentName: string): Promise<AcpClientBridge> {
     await acpClient.value.disconnect();
     acpClient.value = null;
   }
-  const client = await createAcpClient({ name: agentName, config: agentConfig });
+  const client = reactive(await createAcpClient({ name: agentName, config: agentConfig }));
   acpClient.value = client;
   return client;
 }
@@ -205,8 +242,8 @@ async function handleNewSession() {
   try {
     const client = await createClient(selectedAgent.value);
     await client.startNewSession(selectedAgent.value, cwd, appVersion);
-    if (client.currentSession.value) {
-      savedSessions.value.push(client.currentSession.value);
+    if (client.currentSession) {
+      savedSessions.value.push(client.currentSession);
     }
     await saveSessionsToStore();
   } catch (e) {
@@ -375,7 +412,7 @@ async function tryReconnect(): Promise<boolean> {
     if (!agentConfig) {
       throw new Error(`Agent '${session.agentName}' not found in config`);
     }
-    const client = await createAcpClient({ name: session.agentName, config: agentConfig });
+    const client = reactive(await createAcpClient({ name: session.agentName, config: agentConfig }));
     client.setCurrentSession(session);
     acpClient.value = client;
     await client.loadSavedSession(session, appVersion, true);

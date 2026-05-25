@@ -28,7 +28,7 @@ import type {
   SlashCommand,
   ToolCallInfo,
 } from './types';
-import { ref, type Ref } from 'vue';
+import { markRaw } from 'vue';
 import { useTrafficStore } from '../stores/traffic';
 
 type PermissionResolver = (response: RequestPermissionResponse) => void;
@@ -48,57 +48,57 @@ const PROTOCOL_VERSION = 1;
 export class AcpClientBridge implements Client {
   private socket: WebSocket | null = null;
   private readonly url: string;
-  private socketReadyState = ref<number>(WebSocket.CLOSED);
+  private socketReadyState: number = WebSocket.CLOSED;
   private connectPromise: Promise<void> | null = null;
-  private messageResolvers: Map<number, (response: unknown) => void> = new Map();
-  private messageRejecters: Map<number, (error: Error) => void> = new Map();
-  private pendingMethods: Map<number, string> = new Map();
+  private messageResolvers: Map<number, (response: unknown) => void> = markRaw(new Map());
+  private messageRejecters: Map<number, (error: Error) => void> = markRaw(new Map());
+  private pendingMethods: Map<number, string> = markRaw(new Map());
   private nextRequestId = 0;
   private disconnected = false;
   private connectionAborted = false;
   private startupTimer: ReturnType<typeof setInterval> | null = null;
 
-  public pendingPermissionRequest: Ref<LocalPermissionRequest | null> = ref(null);
+  public pendingPermissionRequest: LocalPermissionRequest | null = null;
   private permissionResolver: PermissionResolver | null = null;
-  public pendingAuthMethods: Ref<AuthMethod[]> = ref([]);
-  public pendingAuthAgentName = ref('');
+  public pendingAuthMethods: AuthMethod[] = [];
+  public pendingAuthAgentName = '';
   private authMethodResolver: AuthMethodResolver | null = null;
 
-  public messages: Ref<ChatMessage[]> = ref([]);
-  public toolCalls: Ref<Map<string, ToolCallInfo>> = ref(new Map());
-  public availableModes: Ref<SessionMode[]> = ref([]);
-  public currentModeId = ref('');
-  public availableCommands: Ref<SlashCommand[]> = ref([]);
-  public availableModels: Ref<ModelInfo[]> = ref([]);
-  public currentModelId = ref('');
+  public messages: ChatMessage[] = [];
+  public toolCalls: Map<string, ToolCallInfo> = new Map();
+  public availableModes: SessionMode[] = [];
+  public currentModeId = '';
+  public availableCommands: SlashCommand[] = [];
+  public availableModels: ModelInfo[] = [];
+  public currentModelId = '';
 
-  public currentSession: Ref<SavedSession | null> = ref(null);
-  public isLoading = ref(false);
-  public isConnecting = ref(false);
-  public isReconnecting = ref(false);
-  public sessionError: Ref<string | null> = ref(null);
-  public startupPhase = ref('starting');
-  public startupLogs: Ref<string[]> = ref([]);
-  public startupElapsed = ref(0);
+  public currentSession: SavedSession | null = null;
+  public isLoading = false;
+  public isConnecting = false;
+  public isReconnecting = false;
+  public sessionError: string | null = null;
+  public startupPhase = 'starting';
+  public startupLogs: string[] = [];
+  public startupElapsed = 0;
 
   constructor(url: string) {
     this.url = url;
   }
 
   public get isConnected(): boolean {
-    return this.socketReadyState.value === WebSocket.OPEN && this.currentSession.value !== null;
+    return this.socketReadyState === WebSocket.OPEN && this.currentSession !== null;
   }
 
   async connect(): Promise<void> {
-    if (this.socketReadyState.value === WebSocket.OPEN) return;
+    if (this.socketReadyState === WebSocket.OPEN) return;
     if (this.connectPromise) return this.connectPromise;
     if (this.disconnected) {
       throw new Error('WebSocket is closed');
     }
 
-    const socket = new WebSocket(this.url);
+    const socket = markRaw(new WebSocket(this.url));
     this.socket = socket;
-    this.socketReadyState.value = socket.readyState;
+    this.socketReadyState = socket.readyState;
     socket.addEventListener('message', (event) => {
       this.handleSocketMessage(event);
     });
@@ -119,7 +119,7 @@ export class AcpClientBridge implements Client {
       }
       const handleOpen = () => {
         cleanup();
-        this.socketReadyState.value = socket.readyState;
+        this.socketReadyState = socket.readyState;
         resolve();
       };
       const handleError = () => {
@@ -152,10 +152,10 @@ export class AcpClientBridge implements Client {
     this.disconnected = true;
     this.rejectInFlight(new Error('websocket closed: client disconnected'));
     this.stopConnectionTimer();
-    this.isLoading.value = false;
-    this.isConnecting.value = false;
-    this.isReconnecting.value = false;
-    this.socketReadyState.value = WebSocket.CLOSED;
+    this.isLoading = false;
+    this.isConnecting = false;
+    this.isReconnecting = false;
+    this.socketReadyState = WebSocket.CLOSED;
     if (
       this.socket?.readyState === WebSocket.OPEN ||
       this.socket?.readyState === WebSocket.CONNECTING
@@ -183,11 +183,11 @@ export class AcpClientBridge implements Client {
     this.disconnected = true;
     this.rejectInFlight(new Error(reason));
     this.stopConnectionTimer();
-    this.socketReadyState.value = WebSocket.CLOSED;
-    this.isLoading.value = false;
-    this.isConnecting.value = false;
-    this.isReconnecting.value = false;
-    this.sessionError.value = `Connection lost: ${reason}`;
+    this.socketReadyState = WebSocket.CLOSED;
+    this.isLoading = false;
+    this.isConnecting = false;
+    this.isReconnecting = false;
+    this.sessionError = `Connection lost: ${reason}`;
   }
 
   private rejectInFlight(error: Error): void {
@@ -307,13 +307,13 @@ export class AcpClientBridge implements Client {
 
     switch (update.sessionUpdate) {
       case 'user_message_chunk': {
-        const lastUserMsg = this.messages.value[this.messages.value.length - 1];
+        const lastUserMsg = this.messages[this.messages.length - 1];
         if (lastUserMsg && lastUserMsg.role === 'user') {
           if (update.content.type === 'text') {
             lastUserMsg.content += update.content.text;
           }
         } else {
-          this.messages.value.push({
+          this.messages.push({
             id: crypto.randomUUID(),
             role: 'user',
             content: update.content.type === 'text' ? update.content.text : '',
@@ -324,13 +324,13 @@ export class AcpClientBridge implements Client {
       }
 
       case 'agent_message_chunk': {
-        const lastMsg = this.messages.value[this.messages.value.length - 1];
+        const lastMsg = this.messages[this.messages.length - 1];
         if (lastMsg && lastMsg.role === 'assistant') {
           if (update.content.type === 'text') {
             lastMsg.content += update.content.text;
           }
         } else {
-          this.messages.value.push({
+          this.messages.push({
             id: crypto.randomUUID(),
             role: 'assistant',
             content: update.content.type === 'text' ? update.content.text : '',
@@ -342,13 +342,13 @@ export class AcpClientBridge implements Client {
       }
 
       case 'agent_thought_chunk': {
-        const lastAssistantMsg = this.messages.value[this.messages.value.length - 1];
+        const lastAssistantMsg = this.messages[this.messages.length - 1];
         if (lastAssistantMsg && lastAssistantMsg.role === 'assistant') {
           if (update.content.type === 'text') {
             lastAssistantMsg.thought = (lastAssistantMsg.thought || '') + update.content.text;
           }
         } else {
-          this.messages.value.push({
+          this.messages.push({
             id: crypto.randomUUID(),
             role: 'assistant',
             content: '',
@@ -361,7 +361,7 @@ export class AcpClientBridge implements Client {
       }
 
       case 'tool_call': {
-        const currentAssistantMsg = this.messages.value[this.messages.value.length - 1];
+        const currentAssistantMsg = this.messages[this.messages.length - 1];
         const toolCall = {
           toolCallId: update.toolCallId,
           title: update.title,
@@ -375,16 +375,16 @@ export class AcpClientBridge implements Client {
           }
           currentAssistantMsg.toolCalls.push(toolCall);
         }
-        this.toolCalls.value.set(update.toolCallId, toolCall);
+        this.toolCalls.set(update.toolCallId, toolCall);
         break;
       }
 
       case 'tool_call_update': {
-        const existing = this.toolCalls.value.get(update.toolCallId);
+        const existing = this.toolCalls.get(update.toolCallId);
         if (existing) {
           if (update.status) existing.status = update.status;
           if (update.title) existing.title = update.title;
-          for (const msg of this.messages.value) {
+          for (const msg of this.messages) {
             if (msg.toolCalls) {
               const tc = msg.toolCalls.find(t => t.toolCallId === update.toolCallId);
               if (tc) {
@@ -399,13 +399,13 @@ export class AcpClientBridge implements Client {
 
       case 'current_mode_update':
         if ('modeId' in update && update.modeId) {
-          this.currentModeId.value = update.modeId as string;
+          this.currentModeId = update.modeId as string;
         }
         break;
 
       case 'available_commands_update':
         if ('availableCommands' in update && Array.isArray(update.availableCommands)) {
-          this.availableCommands.value = update.availableCommands.map((cmd) => ({
+          this.availableCommands = update.availableCommands.map((cmd) => ({
             name: cmd.name,
             description: cmd.description,
             hint: cmd.input?.hint ?? undefined,
@@ -532,22 +532,22 @@ export class AcpClientBridge implements Client {
   }
 
   private resetSessionData(): void {
-    this.messages.value = [];
-    this.toolCalls.value.clear();
-    this.availableModes.value = [];
-    this.currentModeId.value = '';
-    this.availableCommands.value = [];
-    this.availableModels.value = [];
-    this.currentModelId.value = '';
+    this.messages = [];
+    this.toolCalls.clear();
+    this.availableModes = [];
+    this.currentModeId = '';
+    this.availableCommands = [];
+    this.availableModels = [];
+    this.currentModelId = '';
   }
 
   private startConnectionTimer(): void {
-    this.startupPhase.value = 'connecting';
-    this.startupLogs.value = [];
-    this.startupElapsed.value = 0;
+    this.startupPhase = 'connecting';
+    this.startupLogs = [];
+    this.startupElapsed = 0;
     this.stopConnectionTimer();
     this.startupTimer = setInterval(() => {
-      this.startupElapsed.value++;
+      this.startupElapsed++;
     }, 1000);
   }
 
@@ -560,27 +560,27 @@ export class AcpClientBridge implements Client {
 
   private applyNewSessionMetadata(sessionResponse: NewSessionResponse): void {
     if (sessionResponse.modes) {
-      this.availableModes.value = (sessionResponse.modes.availableModes || []).map(m => ({
+      this.availableModes = (sessionResponse.modes.availableModes || []).map(m => ({
         id: m.id,
         name: m.name,
         description: m.description ?? undefined,
       }));
-      this.currentModeId.value = sessionResponse.modes.currentModeId || '';
+      this.currentModeId = sessionResponse.modes.currentModeId || '';
     } else {
-      this.availableModes.value = [];
-      this.currentModeId.value = '';
+      this.availableModes = [];
+      this.currentModeId = '';
     }
 
     if (sessionResponse.models) {
-      this.availableModels.value = (sessionResponse.models.availableModels || []).map(m => ({
+      this.availableModels = (sessionResponse.models.availableModels || []).map(m => ({
         modelId: m.modelId,
         name: m.name,
         description: m.description ?? undefined,
       }));
-      this.currentModelId.value = sessionResponse.models.currentModelId || '';
+      this.currentModelId = sessionResponse.models.currentModelId || '';
     } else {
-      this.availableModels.value = [];
-      this.currentModelId.value = '';
+      this.availableModels = [];
+      this.currentModelId = '';
     }
   }
 
@@ -600,16 +600,16 @@ export class AcpClientBridge implements Client {
     agentName: string
   ): Promise<string | null> {
     return new Promise((resolve) => {
-      this.pendingAuthMethods.value = authMethods;
-      this.pendingAuthAgentName.value = agentName;
+      this.pendingAuthMethods = authMethods;
+      this.pendingAuthAgentName = agentName;
       this.authMethodResolver = resolve;
     });
   }
 
   private clearAuthPrompt(): void {
     this.authMethodResolver = null;
-    this.pendingAuthMethods.value = [];
-    this.pendingAuthAgentName.value = '';
+    this.pendingAuthMethods = [];
+    this.pendingAuthAgentName = '';
   }
 
   async retryWithAuth<T>(
@@ -639,11 +639,11 @@ export class AcpClientBridge implements Client {
     cwd: string,
     appVersion: string
   ): Promise<void> {
-    this.isLoading.value = true;
-    this.isConnecting.value = true;
+    this.isLoading = true;
+    this.isConnecting = true;
     this.connectionAborted = false;
-    this.sessionError.value = null;
-    this.currentSession.value = null;
+    this.sessionError = null;
+    this.currentSession = null;
     this.startConnectionTimer();
 
     try {
@@ -674,14 +674,14 @@ export class AcpClientBridge implements Client {
         cwd,
         supportsLoadSession,
       };
-      this.currentSession.value = session;
+      this.currentSession = session;
     } catch (e) {
-      this.sessionError.value = e instanceof Error ? e.message : String(e);
+      this.sessionError = e instanceof Error ? e.message : String(e);
       await this.disconnect();
       throw e;
     } finally {
-      this.isLoading.value = false;
-      this.isConnecting.value = false;
+      this.isLoading = false;
+      this.isConnecting = false;
       this.stopConnectionTimer();
     }
   }
@@ -691,10 +691,10 @@ export class AcpClientBridge implements Client {
     appVersion: string,
     reconnecting = false
   ): Promise<void> {
-    this.isLoading.value = true;
-    this.isReconnecting.value = reconnecting;
+    this.isLoading = true;
+    this.isReconnecting = reconnecting;
     this.connectionAborted = false;
-    this.sessionError.value = null;
+    this.sessionError = null;
 
     try {
       await this.connect();
@@ -721,27 +721,27 @@ export class AcpClientBridge implements Client {
             })
         )
       );
-      this.currentSession.value = savedSession;
+      this.currentSession = savedSession;
       savedSession.lastUpdated = Date.now();
     } catch (e) {
-      this.sessionError.value = e instanceof Error ? e.message : String(e);
+      this.sessionError = e instanceof Error ? e.message : String(e);
       await this.disconnect();
       throw e;
     } finally {
-      this.isLoading.value = false;
-      this.isReconnecting.value = false;
+      this.isLoading = false;
+      this.isReconnecting = false;
     }
   }
 
   async sendPromptText(text: string): Promise<PromptResponse> {
-    const sessionId = this.currentSession.value?.sessionId;
+    const sessionId = this.currentSession?.sessionId;
     if (!sessionId) {
-      this.sessionError.value = 'No active session';
+      this.sessionError = 'No active session';
       throw new Error('No active session');
     }
 
-    this.isLoading.value = true;
-    this.messages.value.push({
+    this.isLoading = true;
+    this.messages.push({
       id: crypto.randomUUID(),
       role: 'user',
       content: text,
@@ -759,32 +759,32 @@ export class AcpClientBridge implements Client {
         ],
       });
     } catch (e) {
-      this.sessionError.value = e instanceof Error ? e.message : String(e);
+      this.sessionError = e instanceof Error ? e.message : String(e);
       throw e;
     } finally {
-      this.isLoading.value = false;
+      this.isLoading = false;
     }
   }
 
   async cancelCurrentSession(): Promise<void> {
-    const sessionId = this.currentSession.value?.sessionId;
+    const sessionId = this.currentSession?.sessionId;
     if (sessionId) {
       await this.cancel({ sessionId });
     }
   }
 
   async setSessionMode(modeId: string): Promise<void> {
-    const sessionId = this.currentSession.value?.sessionId;
+    const sessionId = this.currentSession?.sessionId;
     if (!sessionId) return;
     await this.setMode({ sessionId, modeId });
-    this.currentModeId.value = modeId;
+    this.currentModeId = modeId;
   }
 
   async setSessionModel(modelId: string): Promise<void> {
-    const sessionId = this.currentSession.value?.sessionId;
+    const sessionId = this.currentSession?.sessionId;
     if (!sessionId) return;
     await this.unstable_setSessionModel({ sessionId, modelId });
-    this.currentModelId.value = modelId;
+    this.currentModelId = modelId;
   }
 
   cancelConnection(): void {
@@ -793,22 +793,22 @@ export class AcpClientBridge implements Client {
   }
 
   clearError(): void {
-    this.sessionError.value = null;
+    this.sessionError = null;
   }
 
   setError(message: string): void {
-    this.sessionError.value = message;
+    this.sessionError = message;
   }
 
   setCurrentSession(session: SavedSession | null): void {
-    this.currentSession.value = session;
+    this.currentSession = session;
   }
 
   async requestPermission(
     params: RequestPermissionRequest
   ): Promise<RequestPermissionResponse> {
     return new Promise((resolve) => {
-      this.pendingPermissionRequest.value = {
+      this.pendingPermissionRequest = {
         sessionId: params.sessionId,
         toolCall: {
           toolCallId: params.toolCall.toolCallId,
@@ -836,7 +836,7 @@ export class AcpClientBridge implements Client {
         },
       });
       this.permissionResolver = null;
-      this.pendingPermissionRequest.value = null;
+      this.pendingPermissionRequest = null;
     }
   }
 
@@ -848,7 +848,7 @@ export class AcpClientBridge implements Client {
         },
       });
       this.permissionResolver = null;
-      this.pendingPermissionRequest.value = null;
+      this.pendingPermissionRequest = null;
     }
   }
 
